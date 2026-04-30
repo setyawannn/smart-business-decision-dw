@@ -1,34 +1,44 @@
-# Python
+# Python environment
 .venv/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
-# Dataset besar
+# Raw dataset files
 data/raw/*.csv
 data/raw/*.xlsx
 data/raw/*.xls
 data/raw/*.zip
-data/sample/*.csv
+data/raw/*.parquet
 
-# ClickHouse / Docker volume / local state
+# Sample data if large
+data/sample/*.csv
+data/sample/*.xlsx
+data/sample/*.zip
+
+# ClickHouse / Docker local data
 clickhouse_data/
 *.db
-*.parquet
 *.arrow
+*.parquet
 
 # Logs
 *.log
 logs/
 
-# OS / IDE
-.DS_Store
-Thumbs.db
-.vscode/
-.idea/
-
-# Environment
+# Environment variables
 .env
+.env.local
 
-# Temporary outputs
+# Temporary files
 tmp/
 temp/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE / editor
+.vscode/
+.idea/
