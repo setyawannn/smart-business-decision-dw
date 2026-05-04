@@ -37,6 +37,12 @@ services:
     environment:
       PIPELINE_INPUT_FILE: ${PIPELINE_INPUT_FILE:-amazon_sale_report.csv}
       PIPELINE_DEBUG_KEEPALIVE: ${PIPELINE_DEBUG_KEEPALIVE:-false}
+      PIPELINE_AUTO_DOWNLOAD: ${PIPELINE_AUTO_DOWNLOAD:-true}
+      PIPELINE_FORCE_DOWNLOAD: ${PIPELINE_FORCE_DOWNLOAD:-false}
+      KAGGLE_DATASET: ${KAGGLE_DATASET:-thedevastator/unlock-profits-with-e-commerce-sales-data}
+      KAGGLE_SOURCE_FILENAME: ${KAGGLE_SOURCE_FILENAME:-Amazon Sale Report.csv}
+      KAGGLE_USERNAME: ${KAGGLE_USERNAME:-}
+      KAGGLE_KEY: ${KAGGLE_KEY:-}
     volumes:
       - shared_data:/app/data
     depends_on:

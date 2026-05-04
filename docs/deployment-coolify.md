@@ -2,7 +2,8 @@
 
 Dokumen ini menjelaskan cara deploy project `smart-business-decision-dw` ke Coolify sampai:
 
-- dataset Kaggle masuk ke folder `raw` pada persistent storage Coolify
+- dataset Kaggle diunduh otomatis dari Kaggle saat deploy
+- file sumber di-rename otomatis ke `/data/raw/amazon_sale_report.csv`
 - pipeline Bronze -> Silver -> Gold berjalan otomatis
 - ClickHouse terisi
 - Superset melakukan bootstrap dashboard otomatis
@@ -12,7 +13,7 @@ Dokumen ini mengikuti implementasi repo saat ini:
 
 - `clickhouse` menyimpan warehouse
 - `shared_data` menyimpan file mentah agar tetap ada antar redeploy
-- `pipeline` menjalankan ETL dan seluruh SQL transformasi sekali jalan
+- `pipeline` mengunduh dataset Kaggle, menaruhnya ke lokasi final, lalu menjalankan seluruh ETL sekali jalan
 - `superset` menunggu pipeline selesai lalu melakukan bootstrap dashboard
 
 Referensi resmi Coolify yang dipakai:
@@ -33,8 +34,8 @@ Stack Docker Compose di Coolify terdiri dari 3 service utama:
 Urutan jalannya:
 
 1. Coolify menjalankan `clickhouse`
-2. File Kaggle disimpan di persistent volume `shared_data`
-3. Setelah `clickhouse` sehat, service `pipeline` membaca `/app/data/raw/amazon_sale_report.csv`
+2. Setelah `clickhouse` sehat, service `pipeline` mengunduh dataset Kaggle
+3. `pipeline` mengekstrak file, mencari file CSV yang sesuai, lalu menyalinnya ke `/app/data/raw/amazon_sale_report.csv`
 4. `pipeline` membuat ulang Bronze/Silver/Gold secara bersih dan mengisi data
 5. Setelah `pipeline` sukses, `superset` start
 6. `superset` bootstrap koneksi database, dataset virtual, chart, dan dashboard
@@ -45,7 +46,7 @@ Urutan jalannya:
 - Coolify dapat mengakses repo Git project ini
 - Minimal 4 GB RAM, lebih nyaman 8 GB
 - Domain atau subdomain untuk Superset bila ingin public showcase
-- Akun Kaggle dan API token `kaggle.json`
+- Akun Kaggle dan API credentials (`KAGGLE_USERNAME`, `KAGGLE_KEY`)
 
 ## Opsi Resource di Coolify
 
@@ -92,73 +93,56 @@ CLICKHOUSE_PASSWORD=change_this_superset_password
 
 PIPELINE_INPUT_FILE=amazon_sale_report.csv
 PIPELINE_DEBUG_KEEPALIVE=false
+PIPELINE_AUTO_DOWNLOAD=true
+PIPELINE_FORCE_DOWNLOAD=false
+KAGGLE_DATASET=thedevastator/unlock-profits-with-e-commerce-sales-data
+KAGGLE_SOURCE_FILENAME=Amazon Sale Report.csv
+KAGGLE_USERNAME=your_kaggle_username
+KAGGLE_KEY=your_kaggle_key
 ```
 
 Catatan penting:
 
 - `CLICKHOUSE_SERVER_*` dipakai service ClickHouse internal
 - `CLICKHOUSE_USER` dan `CLICKHOUSE_PASSWORD` dipakai oleh Superset untuk koneksi read-only
-- `PIPELINE_INPUT_FILE` menentukan nama file dataset utama di folder `raw` pada persistent storage
+- `PIPELINE_INPUT_FILE` adalah nama akhir file yang akan dipakai pipeline di folder `raw`
 - `PIPELINE_DEBUG_KEEPALIVE=true` hanya dipakai saat debugging agar container `pipeline` tidak langsung mati setelah gagal
+- `PIPELINE_AUTO_DOWNLOAD=true` membuat pipeline otomatis mengunduh dataset dari Kaggle saat deploy
+- `PIPELINE_FORCE_DOWNLOAD=true` memaksa file sumber diunduh ulang walaupun `/data/raw/amazon_sale_report.csv` sudah ada
+- `KAGGLE_SOURCE_FILENAME` adalah nama file CSV yang diharapkan di dalam arsip Kaggle
 
-## Langkah 3: Siapkan Dataset Kaggle
+## Langkah 3: Deploy Sekali Jalan
 
-Project ini mengharapkan file utama berikut:
+Setelah semua env Kaggle dan ClickHouse diisi, Anda tidak perlu mengunggah file manual.
 
-```text
-/data/raw/amazon_sale_report.csv
-```
+### 3A. Deploy dari Coolify
 
-Karena file dataset tidak disimpan di Git, letakkan file itu lewat terminal Coolify ke persistent storage yang dibagikan ke service `clickhouse` dan `pipeline`.
+Klik `Deploy` pada resource Coolify. Saat deploy:
 
-### 3A. Buka terminal Coolify
+1. `clickhouse` start
+2. `pipeline` otomatis mengunduh dataset dari Kaggle
+3. file CSV di-rename ke `/data/raw/amazon_sale_report.csv`
+4. ETL Bronze -> Silver -> Gold berjalan
+5. `superset` bootstrap dan start
 
-Gunakan terminal bawaan Coolify sesuai dokumentasi resmi:
-[coolify.io/docs/knowledge-base/internal/terminal](https://coolify.io/docs/knowledge-base/internal/terminal)
+### 3B. Deploy dari terminal lokal
 
-Gunakan terminal pada service `clickhouse`, karena service ini selalu hidup dan memount storage `/data`.
-
-### 3B. Unduh dataset dari Kaggle
-
-Di terminal service `clickhouse`, jalankan:
-
-```bash
-mkdir -p ~/.kaggle
-cat > ~/.kaggle/kaggle.json <<'EOF'
-{"username":"KAGGLE_USERNAME","key":"KAGGLE_API_KEY"}
-EOF
-chmod 600 ~/.kaggle/kaggle.json
-python3 -m pip install --user kaggle
-mkdir -p /data/raw
-kaggle datasets download -d thedevastator/unlock-profits-with-e-commerce-sales-data -p /tmp/kaggle-dw
-python3 -m zipfile -e /tmp/kaggle-dw/unlock-profits-with-e-commerce-sales-data.zip /tmp/kaggle-dw/extracted
-find /tmp/kaggle-dw/extracted -iname "*amazon*sale*report*.csv"
-cp "/tmp/kaggle-dw/extracted/Amazon Sale Report.csv" "/data/raw/amazon_sale_report.csv"
-```
-
-Kalau nama file hasil ekstraksi berbeda, yang penting hasil akhirnya menjadi:
-
-```text
-/data/raw/amazon_sale_report.csv
-```
-
-### 3C. Verifikasi file
+Kalau Anda ingin jalankan seluruh stack dari terminal dengan satu perintah:
 
 ```bash
-ls -lah /data/raw
+docker compose up -d --build
 ```
 
-Pastikan file `amazon_sale_report.csv` ada dan ukurannya tidak nol.
+Dengan asumsi env Kaggle dan ClickHouse sudah terisi, perintah ini cukup untuk:
 
-Kalau ingin lebih yakin, cek file persisnya:
+1. build image
+2. start ClickHouse
+3. download dataset Kaggle
+4. rename dan simpan dataset ke volume shared
+5. load warehouse
+6. start Superset
 
-```bash
-ls -lah /data/raw/amazon_sale_report.csv
-```
-
-## Langkah 4: Deploy Stack
-
-Klik `Deploy` di Coolify.
+## Langkah 4: Validasi Log
 
 Urutan yang diharapkan:
 
@@ -169,19 +153,20 @@ Urutan yang diharapkan:
 Catatan:
 Pada deploy pertama, sangat wajar jika `superset` belum jalan sebelum `pipeline` selesai. Itu memang urutan yang diinginkan.
 
-## Langkah 5: Validasi Log
-
 ### Pipeline
 
 Periksa log service `pipeline`. Anda harus melihat alur seperti:
 
 ```text
 [pipeline] dataset_path=/app/data/raw/amazon_sale_report.csv
-[pipeline] dataset_exists=True
-[pipeline] raw_directory_files=['amazon_sale_report.csv']
+[pipeline] auto_download=True
+[pipeline] kaggle_credentials_present=True
+[pipeline] Loading raw Kaggle dataset...
+[pipeline] Starting Kaggle dataset download...
+[pipeline] Extracting downloaded archive: ...
+[pipeline] Copied dataset source Amazon Sale Report.csv to /app/data/raw/amazon_sale_report.csv
 [pipeline] clickhouse_context=host=clickhouse, port=8123, database=smart_dw, user=default
 Connecting to ClickHouse...
-Loading raw Kaggle dataset...
 Refreshing target tables...
 Creating warehouse objects...
 Inserting bronze data...
@@ -211,7 +196,7 @@ Bootstrapped Smart DW ClickHouse and Smart Business Decision Dashboard
 Running on http://0.0.0.0:8088
 ```
 
-## Langkah 6: Buka Dashboard
+## Langkah 5: Buka Dashboard
 
 Expose service `superset` di Coolify menggunakan domain atau subdomain.
 
@@ -230,20 +215,23 @@ Dashboard utama yang akan muncul:
 
 Service `pipeline` akan melakukan semua ini tanpa langkah manual tambahan:
 
-1. Membaca `/app/data/raw/amazon_sale_report.csv`
-2. Menormalkan nama kolom
-3. Membuat atau refresh Bronze
-4. Memuat data mentah ke `smart_dw.bronze_orders_raw`
-5. Menjalankan transformasi Silver
-6. Membuat dimension table
-7. Membuat `fact_sales`
-8. Membuat analytical tables:
+1. Mengunduh dataset dari `KAGGLE_DATASET`
+2. Mengekstrak arsip Kaggle
+3. Mencari file CSV yang cocok dengan `KAGGLE_SOURCE_FILENAME`
+4. Menyalin hasilnya ke `/app/data/raw/amazon_sale_report.csv`
+5. Menormalkan nama kolom
+6. Membuat atau refresh Bronze
+7. Memuat data mentah ke `smart_dw.bronze_orders_raw`
+8. Menjalankan transformasi Silver
+9. Membuat dimension table
+10. Membuat `fact_sales`
+11. Membuat analytical tables:
    - `customer_rfm`
    - `channel_performance_summary`
    - `product_profitability_summary`
    - `sales_forecast_ready`
    - `geographic_performance_summary`
-9. Menjalankan validasi row count dan quality checks
+12. Menjalankan validasi row count dan quality checks
 
 ## Validasi Setelah Deploy
 
@@ -264,13 +252,12 @@ clickhouse-client --database smart_dw --multiquery < /sql/validation/data_qualit
 
 ## Redeploy Saat Dataset Diganti
 
-Jika Anda mengganti file Kaggle dengan file baru:
+Jika Anda ingin memaksa download ulang dataset dari Kaggle:
 
-1. upload atau replace file di `/data/raw/amazon_sale_report.csv`
-2. verifikasi file dengan `ls -lah /data/raw/amazon_sale_report.csv`
-3. lakukan `Redeploy` resource di Coolify
-4. cek log service `pipeline`
-5. setelah `pipeline` sukses, cek `superset`
+1. ubah env `PIPELINE_FORCE_DOWNLOAD=true`
+2. lakukan `Redeploy` resource di Coolify atau jalankan lagi `docker compose up -d --build`
+3. cek log service `pipeline`
+4. setelah sukses, kembalikan `PIPELINE_FORCE_DOWNLOAD=false`
 
 Karena service `pipeline` melakukan refresh target table, hasil warehouse akan dibangun ulang dari file terbaru.
 
@@ -286,8 +273,9 @@ Dataset tidak ditemukan: /app/data/raw/amazon_sale_report.csv
 
 Solusi:
 
-- cek kembali file sudah berada di `/data/raw/amazon_sale_report.csv`
-- cek nama file sesuai `PIPELINE_INPUT_FILE`
+- pastikan `PIPELINE_AUTO_DOWNLOAD=true`
+- pastikan `KAGGLE_USERNAME` dan `KAGGLE_KEY` terisi
+- cek `KAGGLE_DATASET` dan `KAGGLE_SOURCE_FILENAME`
 - cek log awal `pipeline` untuk `dataset_exists=False` atau `raw_directory_files=[]`
 
 ### Pipeline gagal tetapi Coolify hanya menampilkan `exit 1`
@@ -297,7 +285,9 @@ Solusi:
 - buka log service `pipeline` langsung dari UI Coolify, bukan hanya log deploy
 - bila log masih terlalu singkat, set `PIPELINE_DEBUG_KEEPALIVE=true` lalu redeploy
 - cocokkan error ke salah satu kategori:
-  - file input tidak ada
+  - kredensial Kaggle belum diisi
+  - download Kaggle gagal
+  - file CSV di dalam arsip tidak cocok
   - koneksi ClickHouse gagal
   - parsing CSV gagal
   - SQL transform gagal

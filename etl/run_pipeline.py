@@ -1,5 +1,10 @@
 import os
+import shutil
+import subprocess
+import sys
+import tempfile
 import traceback
+import zipfile
 from pathlib import Path
 
 import clickhouse_connect
@@ -11,6 +16,7 @@ DATA_DIR = ROOT_DIR / "data" / "raw"
 SQL_DIR = ROOT_DIR / "sql"
 DATA_FILE = os.getenv("PIPELINE_INPUT_FILE", "amazon_sale_report.csv")
 DATA_PATH = DATA_DIR / DATA_FILE
+DOWNLOADS_DIR = ROOT_DIR / "downloads"
 
 CLICKHOUSE_HOST = os.getenv("CLICKHOUSE_HOST", "clickhouse")
 CLICKHOUSE_PORT = int(os.getenv("CLICKHOUSE_HTTP_PORT", "8123"))
@@ -18,6 +24,15 @@ CLICKHOUSE_DB = os.getenv("CLICKHOUSE_DATABASE", "smart_dw")
 CLICKHOUSE_USER = os.getenv("CLICKHOUSE_SERVER_USER", "default")
 CLICKHOUSE_PASSWORD = os.getenv("CLICKHOUSE_SERVER_PASSWORD", "")
 PIPELINE_DEBUG_KEEPALIVE = os.getenv("PIPELINE_DEBUG_KEEPALIVE", "false").lower() == "true"
+PIPELINE_AUTO_DOWNLOAD = os.getenv("PIPELINE_AUTO_DOWNLOAD", "true").lower() == "true"
+PIPELINE_FORCE_DOWNLOAD = os.getenv("PIPELINE_FORCE_DOWNLOAD", "false").lower() == "true"
+KAGGLE_DATASET = os.getenv(
+    "KAGGLE_DATASET",
+    "thedevastator/unlock-profits-with-e-commerce-sales-data",
+)
+KAGGLE_SOURCE_FILENAME = os.getenv("KAGGLE_SOURCE_FILENAME", "Amazon Sale Report.csv")
+KAGGLE_USERNAME = os.getenv("KAGGLE_USERNAME", "")
+KAGGLE_KEY = os.getenv("KAGGLE_KEY", "")
 
 PIPELINE_SQL_FILES = [
     SQL_DIR / "bronze" / "create_bronze_tables.sql",
@@ -62,6 +77,106 @@ def describe_runtime_context() -> None:
         f"host={CLICKHOUSE_HOST}, port={CLICKHOUSE_PORT}, database={CLICKHOUSE_DB}, user={CLICKHOUSE_USER}"
     )
     log(f"debug_keepalive={PIPELINE_DEBUG_KEEPALIVE}")
+    log(f"auto_download={PIPELINE_AUTO_DOWNLOAD}")
+    log(f"force_download={PIPELINE_FORCE_DOWNLOAD}")
+    log(f"kaggle_dataset={KAGGLE_DATASET}")
+    log(f"kaggle_source_filename={KAGGLE_SOURCE_FILENAME}")
+    log(f"kaggle_credentials_present={bool(KAGGLE_USERNAME and KAGGLE_KEY)}")
+
+
+def ensure_directories() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def find_downloaded_csv(extracted_dir: Path) -> Path:
+    preferred = extracted_dir / KAGGLE_SOURCE_FILENAME
+    if preferred.exists():
+        return preferred
+
+    csv_candidates = sorted(extracted_dir.rglob("*.csv"))
+    if not csv_candidates:
+        raise FileNotFoundError(
+            f"Tidak ada file CSV yang ditemukan setelah ekstraksi dataset Kaggle {KAGGLE_DATASET}"
+        )
+
+    normalized_target = DATA_FILE.lower().replace("_", "").replace(" ", "")
+    for candidate in csv_candidates:
+        normalized_name = candidate.name.lower().replace("_", "").replace(" ", "")
+        if normalized_target in normalized_name or "amazonsalereport" in normalized_name:
+            return candidate
+
+    return csv_candidates[0]
+
+
+def download_dataset_from_kaggle() -> None:
+    if not KAGGLE_USERNAME or not KAGGLE_KEY:
+        raise RuntimeError(
+            "KAGGLE_USERNAME atau KAGGLE_KEY belum diisi. "
+            "Isi env Kaggle di Coolify agar pipeline bisa mengunduh dataset otomatis."
+        )
+
+    ensure_directories()
+    log("Starting Kaggle dataset download...")
+
+    with tempfile.TemporaryDirectory(prefix="kaggle-download-") as temp_dir_name:
+        temp_dir = Path(temp_dir_name)
+        command = [
+            sys.executable,
+            "-m",
+            "kaggle",
+            "datasets",
+            "download",
+            "-d",
+            KAGGLE_DATASET,
+            "-p",
+            str(temp_dir),
+            "--force",
+        ]
+        log(f"Running command: {' '.join(command[:-1])} --force")
+        subprocess.run(
+            command,
+            check=True,
+            env=os.environ.copy(),
+            capture_output=False,
+            text=True,
+        )
+
+        zip_files = sorted(temp_dir.glob("*.zip"))
+        if not zip_files:
+            raise FileNotFoundError(
+                f"File ZIP hasil download Kaggle tidak ditemukan di {temp_dir}"
+            )
+
+        zip_path = zip_files[0]
+        extracted_dir = temp_dir / "extracted"
+        extracted_dir.mkdir(parents=True, exist_ok=True)
+        log(f"Extracting downloaded archive: {zip_path.name}")
+        with zipfile.ZipFile(zip_path) as archive:
+            archive.extractall(extracted_dir)
+
+        source_csv = find_downloaded_csv(extracted_dir)
+        shutil.copy2(source_csv, DATA_PATH)
+        log(f"Copied dataset source {source_csv.name} to {DATA_PATH}")
+
+
+def ensure_dataset_available() -> None:
+    ensure_directories()
+
+    if DATA_PATH.exists() and not PIPELINE_FORCE_DOWNLOAD:
+        log(f"Using existing dataset at {DATA_PATH}")
+        return
+
+    if DATA_PATH.exists() and PIPELINE_FORCE_DOWNLOAD:
+        log(f"Force download enabled, replacing existing dataset at {DATA_PATH}")
+
+    if not PIPELINE_AUTO_DOWNLOAD and not DATA_PATH.exists():
+        raise FileNotFoundError(
+            f"Dataset tidak ditemukan: {DATA_PATH}. "
+            "Pipeline auto download dimatikan, jadi file harus sudah tersedia."
+        )
+
+    download_dataset_from_kaggle()
 
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -108,12 +223,7 @@ def run_sql_file(client: clickhouse_connect.driver.Client, path: Path) -> None:
 
 
 def load_bronze_dataframe() -> pd.DataFrame:
-    if not DATA_PATH.exists():
-        raise FileNotFoundError(
-            f"Dataset tidak ditemukan: {DATA_PATH}. "
-            "Pastikan file Kaggle sudah diletakkan pada /data/raw/amazon_sale_report.csv "
-            "atau /app/data/raw/amazon_sale_report.csv"
-        )
+    ensure_dataset_available()
 
     try:
         df = pd.read_csv(DATA_PATH, encoding="utf-8-sig")
@@ -193,6 +303,10 @@ def validate_clickhouse_connection(client: clickhouse_connect.driver.Client) -> 
 
 def main() -> None:
     describe_runtime_context()
+    log("Loading raw Kaggle dataset...")
+    bronze_df = load_bronze_dataframe()
+    log(f"Rows prepared for bronze load: {len(bronze_df)}")
+
     log(f"Connecting to ClickHouse at {CLICKHOUSE_HOST}:{CLICKHOUSE_PORT}/{CLICKHOUSE_DB}")
     client = clickhouse_connect.get_client(
         host=CLICKHOUSE_HOST,
@@ -202,10 +316,6 @@ def main() -> None:
         database=CLICKHOUSE_DB,
     )
     validate_clickhouse_connection(client)
-
-    log("Loading raw Kaggle dataset...")
-    bronze_df = load_bronze_dataframe()
-    log(f"Rows prepared for bronze load: {len(bronze_df)}")
 
     log("Refreshing target tables...")
     for statement in REFRESH_STATEMENTS:
