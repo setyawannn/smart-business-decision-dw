@@ -1,0 +1,17 @@
+<clickhouse>
+  <profiles>
+    <superset_readonly>
+      <readonly>1</readonly>
+    </superset_readonly>
+  </profiles>
+  <users>
+    <superset>
+      <password>superset_lokal_kamu</password>
+      <profile>superset_readonly</profile>
+      <quota>default</quota>
+      <networks>
+        <ip>172.23.0.0/16</ip>
+      </networks>
+    </superset>
+  </users>
+</clickhouse>

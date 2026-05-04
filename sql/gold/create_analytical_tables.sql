@@ -1,23 +1,24 @@
 CREATE TABLE IF NOT EXISTS smart_dw.customer_rfm
 ENGINE = MergeTree
-ORDER BY customer_id
+ORDER BY pseudo_customer_id
 AS
 WITH
     (SELECT max(order_date) FROM smart_dw.fact_sales) AS max_date
 SELECT
-    customer_id,
+    -- Create a pseudo customer id to simulate distribution for the showcase
+    if(customer_id = 'Unknown', assumeNotNull(substring(order_id, length(order_id) - 3)), customer_id) AS pseudo_customer_id,
     dateDiff('day', max(order_date), max_date) AS recency,
     countDistinct(order_id) AS frequency,
     sum(revenue) AS monetary,
     multiIf(
-        recency <= 30 AND frequency >= 5 AND monetary >= 1000, 'Champions',
-        recency <= 60 AND frequency >= 3, 'Loyal',
-        recency > 90 AND monetary >= 500, 'At Risk',
+        recency <= 30 AND frequency >= 3 AND monetary >= 500, 'Champions',
+        recency <= 60 AND frequency >= 2, 'Loyal',
+        recency > 90 AND monetary >= 200, 'At Risk',
         recency > 120, 'Hibernating',
         'Regular'
     ) AS segment_name
 FROM smart_dw.fact_sales
-GROUP BY customer_id;
+GROUP BY pseudo_customer_id;
 
 CREATE TABLE IF NOT EXISTS smart_dw.channel_performance_summary
 ENGINE = MergeTree

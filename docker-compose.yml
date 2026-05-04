@@ -2,22 +2,62 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:latest
     container_name: smart_dw_clickhouse
+    restart: unless-stopped
     ports:
-      - "8123:8123"
-      - "9000:9000"
+      - "${CLICKHOUSE_HTTP_PORT}:8123"
+      - "${CLICKHOUSE_NATIVE_PORT}:9000"
     environment:
-      CLICKHOUSE_DB: smart_dw
-      CLICKHOUSE_USER: default
-      CLICKHOUSE_PASSWORD: ""
-      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+      CLICKHOUSE_DB: ${CLICKHOUSE_DATABASE}
+      CLICKHOUSE_USER: ${CLICKHOUSE_SERVER_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_SERVER_PASSWORD:-}
     volumes:
       - clickhouse_data:/var/lib/clickhouse
+      - ./clickhouse/users.d/superset-user.xml:/etc/clickhouse-server/users.d/superset-user.xml:ro
       - ./sql:/sql
       - ./data:/data
-    ulimits:
-      nofile:
-        soft: 262144
-        hard: 262144
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget --quiet --tries=1 --spider http://localhost:8123/ping || exit 1"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  superset:
+    build:
+      context: ./superset
+      dockerfile: Dockerfile
+    container_name: smart_dw_superset
+    restart: unless-stopped
+    ports:
+      - "${SUPERSET_PORT}:8088"
+    env_file:
+      - .env
+    volumes:
+      - ./superset/config/superset_config.py:/app/pythonpath/superset_config.py
+      - ./superset/bootstrap:/app/bootstrap
+      - superset_home:/app/superset_home
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    command: >
+      /bin/sh -c "
+      superset db upgrade &&
+      (superset fab create-admin
+      --username $${SUPERSET_ADMIN_USERNAME}
+      --firstname $${SUPERSET_ADMIN_FIRSTNAME}
+      --lastname $${SUPERSET_ADMIN_LASTNAME}
+      --email $${SUPERSET_ADMIN_EMAIL}
+      --password $${SUPERSET_ADMIN_PASSWORD}
+      || echo 'Superset admin user may already exist') &&
+      superset init &&
+      python /app/bootstrap/bootstrap_superset.py &&
+      superset run -h 0.0.0.0 -p 8088
+      "
 
 volumes:
   clickhouse_data:
+  superset_home:
