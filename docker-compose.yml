@@ -14,7 +14,7 @@ services:
       - clickhouse_data:/var/lib/clickhouse
       - ./clickhouse/users.d/superset-user.xml:/etc/clickhouse-server/users.d/superset-user.xml:ro
       - ./sql:/sql
-      - ./data:/data
+      - shared_data:/data
     healthcheck:
       test:
         [
@@ -25,6 +25,23 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
+
+  pipeline:
+    build:
+      context: .
+      dockerfile: etl/Dockerfile
+    container_name: smart_dw_pipeline
+    restart: "no"
+    env_file:
+      - .env
+    environment:
+      PIPELINE_INPUT_FILE: ${PIPELINE_INPUT_FILE:-amazon_sale_report.csv}
+    volumes:
+      - shared_data:/app/data
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    command: python /app/etl/run_pipeline.py
 
   superset:
     build:
@@ -43,6 +60,8 @@ services:
     depends_on:
       clickhouse:
         condition: service_healthy
+      pipeline:
+        condition: service_completed_successfully
     command: >
       /bin/sh -c "
       superset db upgrade &&
@@ -61,3 +80,4 @@ services:
 volumes:
   clickhouse_data:
   superset_home:
+  shared_data:
