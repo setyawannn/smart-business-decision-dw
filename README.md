@@ -307,8 +307,13 @@ Pastikan perangkat sudah memiliki:
 ```bash
 git clone https://github.com/setyawannn/smart-business-decision-dw.git
 cd smart-business-decision-dw
-# (Download dataset amazon_sale_report.csv dari Kaggle dan letakkan di data/raw/amazon_sale_report.csv)
 ```
+
+Bagi Anda yang baru pertama melakukan setup, unduh data mentah secara otomatis menggunakan script utilitas (Kaggle CLI yang telah ditautkan pada API `~/.kaggle/kaggle.json` sangat diperlukan sebelum menjalankan script ini):
+```bash
+bash scripts/download_dataset.sh
+```
+*(Script ini akan mengunduh, mengekstrak, dan merename file `Amazon Sale Report.csv` menjadi `amazon_sale_report.csv` yang diproses ETL ini).*
 
 #### 2. Buat Environment dan Install Dependensi
 ```bash
@@ -328,6 +333,47 @@ Pastikan semuanya berjalan (opsional cek status container):
 ```bash
 docker ps
 ```
+
+---
+
+## 🚀 Deployment dengan Coolify (Production)
+
+Arsitektur aplikasi ini (*ClickHouse + Apache Superset*) juga dikonfigurasikan agar persisten dan tangguh untuk *Self-Hosted PaaS* seperti **Coolify**. Praktik pengimplementasian deployment-nya sebagai berikut:
+
+**1. Konfigurasi Repositori Git**
+* Tambahkan Repositori ini ke *Coolify Applications* dengan metode **"Docker Compose"**.
+* Konfigurasi Branch ke komit terbaru Anda (`main`).
+
+**2. Kaggle Dataset pada Environment Produksi**
+Mengingat ukuran dataset melebihi batas GIT standard (sekitar ~15MB+) dan sering masuk ke `.gitignore`, pada dasbor kontrol Coolify isi *Pre-deployment Command* atau jalankan pada terminal *Container/Host server* Anda:
+```bash
+# Instal Kaggle jika tidak bawaan
+pip install kaggle
+
+# Unduh dan Rapikan Otomatis Database Raw
+bash scripts/download_dataset.sh
+```
+*(Ingat untuk juga memasukkan file autentikasi `kaggle.json` ke direktori spesifik server tersebut jika mengunduhnya secara remote).*
+
+**3. Konfigurasi Environment (Variables)**
+Masukkan semua kredensial `.env` pada GUI Coolify:
+```ini
+CLICKHOUSE_DATABASE=smart_dw
+CLICKHOUSE_SERVER_USER=default
+CLICKHOUSE_SERVER_PASSWORD=
+
+SUPERSET_PORT=8088
+SUPERSET_ADMIN_USERNAME=admin
+SUPERSET_ADMIN_PASSWORD=admin
+SUPERSET_ADMIN_EMAIL=admin@superset.com
+SUPERSET_ADMIN_FIRSTNAME=Smart
+SUPERSET_ADMIN_LASTNAME=DW
+```
+
+**4. Networking Coolify**
+Secara nirkabel Coolify (Traefik) akan memetakan *Reverse Proxy* ke layanan `Superset`.
+* Atur Port di UI Coolify untuk mengekspos public IP ke service `superset` melaui Port `8088`.
+* Tunggu sekitar 2-3 menit sewaktu tahap inisiasi (*creating user & bootstrap dashboard*) selesai hingga notifikasi `Bootstrapped Smart DW` terbit pada Log Deploy.
 
 ---
 
