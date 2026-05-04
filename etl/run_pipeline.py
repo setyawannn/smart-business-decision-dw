@@ -1,14 +1,13 @@
 import os
+from datetime import datetime
 import shutil
-import subprocess
-import sys
 import tempfile
 import traceback
-import zipfile
 from pathlib import Path
 
 import clickhouse_connect
 import pandas as pd
+from kaggle.api.kaggle_api_extended import KaggleApi
 
 
 ROOT_DIR = Path("/app")
@@ -17,6 +16,8 @@ SQL_DIR = ROOT_DIR / "sql"
 DATA_FILE = os.getenv("PIPELINE_INPUT_FILE", "amazon_sale_report.csv")
 DATA_PATH = DATA_DIR / DATA_FILE
 DOWNLOADS_DIR = ROOT_DIR / "downloads"
+LOGS_DIR = ROOT_DIR / "data" / "logs"
+PIPELINE_LOG_PATH = LOGS_DIR / "pipeline.log"
 
 CLICKHOUSE_HOST = os.getenv("CLICKHOUSE_HOST", "clickhouse")
 CLICKHOUSE_PORT = int(os.getenv("CLICKHOUSE_HTTP_PORT", "8123"))
@@ -59,7 +60,11 @@ REFRESH_STATEMENTS = [
 
 
 def log(message: str) -> None:
-    print(f"[pipeline] {message}", flush=True)
+    formatted = f"[pipeline] {message}"
+    print(formatted, flush=True)
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    with PIPELINE_LOG_PATH.open("a", encoding="utf-8") as log_file:
+        log_file.write(f"{datetime.utcnow().isoformat()}Z {formatted}\n")
 
 
 def describe_runtime_context() -> None:
@@ -87,6 +92,7 @@ def describe_runtime_context() -> None:
 def ensure_directories() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def find_downloaded_csv(extracted_dir: Path) -> Path:
@@ -121,41 +127,20 @@ def download_dataset_from_kaggle() -> None:
 
     with tempfile.TemporaryDirectory(prefix="kaggle-download-") as temp_dir_name:
         temp_dir = Path(temp_dir_name)
-        command = [
-            sys.executable,
-            "-m",
-            "kaggle",
-            "datasets",
-            "download",
-            "-d",
+        log("Authenticating with Kaggle API")
+        api = KaggleApi()
+        api.authenticate()
+
+        log(f"Downloading dataset {KAGGLE_DATASET} to {temp_dir}")
+        api.dataset_download_files(
             KAGGLE_DATASET,
-            "-p",
-            str(temp_dir),
-            "--force",
-        ]
-        log(f"Running command: {' '.join(command[:-1])} --force")
-        subprocess.run(
-            command,
-            check=True,
-            env=os.environ.copy(),
-            capture_output=False,
-            text=True,
+            path=str(temp_dir),
+            unzip=True,
+            force=True,
+            quiet=False,
         )
 
-        zip_files = sorted(temp_dir.glob("*.zip"))
-        if not zip_files:
-            raise FileNotFoundError(
-                f"File ZIP hasil download Kaggle tidak ditemukan di {temp_dir}"
-            )
-
-        zip_path = zip_files[0]
-        extracted_dir = temp_dir / "extracted"
-        extracted_dir.mkdir(parents=True, exist_ok=True)
-        log(f"Extracting downloaded archive: {zip_path.name}")
-        with zipfile.ZipFile(zip_path) as archive:
-            archive.extractall(extracted_dir)
-
-        source_csv = find_downloaded_csv(extracted_dir)
+        source_csv = find_downloaded_csv(temp_dir)
         shutil.copy2(source_csv, DATA_PATH)
         log(f"Copied dataset source {source_csv.name} to {DATA_PATH}")
 
@@ -345,5 +330,8 @@ if __name__ == "__main__":
         main()
     except Exception as exc:
         log(f"Pipeline failed: {exc}")
-        traceback.print_exc()
+        stack_trace = traceback.format_exc()
+        print(stack_trace, flush=True)
+        with PIPELINE_LOG_PATH.open("a", encoding="utf-8") as log_file:
+            log_file.write(stack_trace)
         raise
