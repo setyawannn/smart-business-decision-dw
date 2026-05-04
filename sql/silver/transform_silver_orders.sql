@@ -22,6 +22,8 @@ CREATE TABLE smart_dw.silver_orders_clean
     discount Float64,
 
     country String,
+    state String,
+    city String,
 
     ingestion_time DateTime
 )
@@ -54,6 +56,8 @@ SELECT
     toFloat64OrZero(toString(raw_discount)) AS discount,
 
     if(raw_country = '', 'Unknown', raw_country) AS country,
+    if(raw_state = '', 'Unknown', raw_state) AS state,
+    if(raw_city = '', 'Unknown', raw_city) AS city,
 
     raw_ingestion_time AS ingestion_time
 FROM
@@ -83,6 +87,8 @@ FROM
         toString(discount) AS raw_discount,
 
         toString(country) AS raw_country,
+        toString(state) AS raw_state,
+        toString(city) AS raw_city,
 
         ingestion_time AS raw_ingestion_time
     FROM smart_dw.bronze_orders_raw

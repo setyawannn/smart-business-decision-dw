@@ -6,7 +6,9 @@ SELECT DISTINCT
     customer_id,
     any(customer_name) AS customer_name,
     'Unknown' AS customer_segment,
-    any(country) AS country
+    any(country) AS country,
+    any(state) AS state,
+    any(city) AS city
 FROM smart_dw.silver_orders_clean
 WHERE customer_id IS NOT NULL
 GROUP BY customer_id;

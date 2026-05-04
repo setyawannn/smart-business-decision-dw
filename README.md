@@ -34,13 +34,12 @@
   - [📁 Struktur Repository](#-struktur-repository)
   - [🚀 Instalasi dan Setup](#-instalasi-dan-setup)
     - [Prasyarat](#prasyarat)
-    - [Langkah Instalasi](#langkah-instalasi)
-      - [1. Clone Repository](#1-clone-repository)
-      - [2. Download Dataset](#2-download-dataset)
-      - [3. Buat Virtual Environment (Python)](#3-buat-virtual-environment-python)
-      - [4. Install Dependensi](#4-install-dependensi)
-      - [5. Jalankan ClickHouse dengan Docker](#5-jalankan-clickhouse-dengan-docker)
-  - [⚙️ Menjalankan Pipeline](#️-menjalankan-pipeline)
+    - [Langkah Instalasi Umum](#langkah-instalasi-umum)
+      - [1. Clone Repository \& Setup Dataset](#1-clone-repository--setup-dataset)
+      - [2. Buat Environment dan Install Dependensi](#2-buat-environment-dan-install-dependensi)
+      - [3. Jalankan Docker Environment Terpadu](#3-jalankan-docker-environment-terpadu)
+  - [⚙️ Menjalankan Pipeline dari Data Mentah Hingga Dashboard](#️-menjalankan-pipeline-dari-data-mentah-hingga-dashboard)
+    - [🎉 Mengakses Dashboard](#-mengakses-dashboard)
   - [📈 Output yang Diharapkan](#-output-yang-diharapkan)
   - [🔍 Validasi Data](#-validasi-data)
   - [📊 Analisis dan Tabel Analitik](#-analisis-dan-tabel-analitik)
@@ -58,7 +57,7 @@
   - [🧹 Reset Environment](#-reset-environment)
     - [Menghentikan Container](#menghentikan-container)
     - [Reset Total (Hapus Data)](#reset-total-hapus-data)
-  - [🚦 Status Proyek](#-status-proyek)
+  - [� Status Proyek](#-status-proyek)
   - [🔮 Pengembangan Selanjutnya](#-pengembangan-selanjutnya)
   - [👤 Author](#-author)
 
@@ -301,93 +300,59 @@ Pastikan perangkat sudah memiliki:
 | Git | Terbaru | `git --version` |
 | Docker Desktop | Terbaru | `docker --version` |
 | Python | 3.10+ | `python --version` |
-| PowerShell / Terminal | — | — |
-| Akun Kaggle | — | Untuk download dataset |
 
-### Langkah Instalasi
+### Langkah Instalasi Umum
 
-#### 1. Clone Repository
-
+#### 1. Clone Repository & Setup Dataset
 ```bash
 git clone https://github.com/setyawannn/smart-business-decision-dw.git
 cd smart-business-decision-dw
+# (Download dataset amazon_sale_report.csv dari Kaggle dan letakkan di data/raw/amazon_sale_report.csv)
 ```
 
-#### 2. Download Dataset
-
-1. Download dataset dari [Kaggle](https://www.kaggle.com/datasets/thedevastator/unlock-profits-with-e-commerce-sales-data)
-2. Letakkan file utama ke folder: `data/raw/`
-3. Pastikan file tersedia: `data/raw/amazon_sale_report.csv`
-
-#### 3. Buat Virtual Environment (Python)
-
-**Windows (PowerShell):**
-```powershell
+#### 2. Buat Environment dan Install Dependensi
+```bash
+# Windows
 python -m venv .venv
 .venv\Scripts\Activate.ps1
-```
-
-**Linux / macOS:**
-```bash
-python -m venv .venv
-source .venv/bin/activate
-```
-
-#### 4. Install Dependensi
-
-```bash
 pip install -r requirements.txt
 ```
 
-**Isi `requirements.txt`:**
-```
-pandas
-clickhouse-connect
-```
-
-#### 5. Jalankan ClickHouse dengan Docker
-
+#### 3. Jalankan Docker Environment Terpadu
+Proyek ini memuat **ClickHouse** (layanan database warehouse) dan **Superset** (layanan dashboard) dalam satu ekosistem.
 ```bash
 docker compose up -d
 ```
-
-**Verifikasi container berjalan:**
+Tunggu sekitar 2-3 menit hingga inisialisasi awal Superset di dalam kontainer selesai.
+Pastikan semuanya berjalan (opsional cek status container):
 ```bash
-docker ps --filter "name=smart_dw_clickhouse"
-```
-
-**Masuk ke ClickHouse client:**
-```bash
-docker exec -it smart_dw_clickhouse clickhouse-client
-```
-
-**Cek database:**
-```sql
-SHOW DATABASES;
-```
-
-**Keluar dari client:**
-```sql
-exit
+docker ps
 ```
 
 ---
 
-## ⚙️ Menjalankan Pipeline
+## ⚙️ Menjalankan Pipeline dari Data Mentah Hingga Dashboard
 
-Jalankan pipeline secara berurutan sesuai urutan Medallion Architecture:
+Jalankan fungsi pipeline berikut secara berurutan:
 
-| Step | Layer | Perintah | Deskripsi |
+| Tahap | Engine | Perintah / Script Command | Fungsi |
 |------|-------|----------|-----------|
-| 1 | **Bronze** | `docker exec -it smart_dw_clickhouse clickhouse-client --queries-file /sql/bronze/create_bronze_tables.sql` | Buat tabel Bronze |
-| 2 | **Ingestion** | `python etl/load_to_clickhouse.py` | Load CSV ke Bronze |
-| 3 | **Silver** | `docker exec -it smart_dw_clickhouse clickhouse-client --queries-file /sql/silver/transform_silver_orders.sql` | Transformasi ke Silver |
-| 4 | **Gold — Dimensions** | `docker exec -it smart_dw_clickhouse clickhouse-client --queries-file /sql/gold/create_dimensions.sql` | Buat dimension tables |
-| 5 | **Gold — Facts** | `docker exec -it smart_dw_clickhouse clickhouse-client --queries-file /sql/gold/create_fact_sales.sql` | Buat fact table |
-| 6 | **Analytics** | `docker exec -it smart_dw_clickhouse clickhouse-client --queries-file /sql/gold/create_analytical_tables.sql` | Buat analytical tables |
-| 7 | **Validation** | `docker exec -it smart_dw_clickhouse clickhouse-client --queries-file /sql/validation/data_quality_checks.sql` | Validasi data quality |
+| **1. Init DDL** | ClickHouse | `docker exec -i smart_dw_clickhouse clickhouse-client < sql/bronze/create_bronze_tables.sql` | Buat tabel layer Bronze awal. |
+| **2. Ingestion**| Python ETL | `python etl/load_to_clickhouse.py` | Ekstraksi raw CSV & upload ke kontainer DB. |
+| **3. Clean** | ClickHouse | `docker exec -i smart_dw_clickhouse clickhouse-client < sql/silver/transform_silver_orders.sql` | Olah Bronze ke Silver Layer. |
+| **4. Warehouse**| ClickHouse | `docker exec -i smart_dw_clickhouse clickhouse-client < sql/gold/create_dimensions.sql` <br> `docker exec -i smart_dw_clickhouse clickhouse-client < sql/gold/create_fact_sales.sql` | Membangun Medallion Gold Layer. |
+| **5. Data Mart**| ClickHouse | `docker exec -i smart_dw_clickhouse clickhouse-client < sql/gold/create_analytical_tables.sql` | Menjalankan agregasi analitik (termasuk segmentasi RFM). |
+| **6. Dashboard**| Superset | `docker exec -i smart_dw_superset sh -c "python /app/bootstrap/bootstrap_superset.py"` | Sinkronisasi metadata, koneksi visualisasi bagan, dan layout Dashboard otomatis 🚀 |
 
-**Tips:** Salin dan jalankan setiap perintah satu per satu untuk memastikan tidak ada error.
+### 🎉 Mengakses Dashboard
+Setelah Perintah ke-6 berhasil dijalankan dengan keterangan `Bootstrapped Smart Business Decision Dashboard`, buka browser Anda:
+
+- **Akses URL:** [http://localhost:8088](http://localhost:8088)
+- **Login:**
+  - Username: `admin`
+  - Password: `admin`
+
+Klik menu **Dashboards** > lalu buka **Smart Business Decision Dashboard**. Anda akan melihat data hasil warehouse Anda divisualisasikan dengan apik!
 
 ---
 
@@ -586,19 +551,17 @@ Gunakan hanya jika ingin memulai dari awal.
 
 ---
 
-## 🚦 Status Proyek
+## � Status Proyek
 
 | Komponen | Status |
 |----------|--------|
 | Docker Environment | ✅ Completed |
 | ClickHouse Setup | ✅ Completed |
-| Bronze Layer | ✅ Completed |
-| Silver Layer | ✅ Completed |
-| Gold Layer | ✅ Completed |
-| Analytical Tables | ✅ Completed |
+| Medallion ETL/ELT Pipeline | ✅ Completed |
 | Data Quality Validation | ✅ Completed |
-| Dashboard | ⏳ Next Phase |
-| Visualization | ⏳ Next Phase |
+| Data Analytics (RFM) | ✅ Completed |
+| **Apache Superset Setup** | ✅ Completed |
+| **Dashboarding & Visualization** | ✅ Completed |
 
 ---
 
@@ -606,11 +569,12 @@ Gunakan hanya jika ingin memulai dari awal.
 
 Tahap berikutnya dari proyek ini meliputi:
 
-- [ ] Mendesain dashboard analytics
-- [ ] Menghubungkan Apache Superset ke ClickHouse
-- [ ] Membuat visualisasi KPI revenue dan order
-- [ ] Membuat visualisasi performa produk dan channel
-- [ ] Menggunakan `sales_forecast_ready` untuk analisis tren dan forecasting
+- [x] Mendesain dashboard analytics
+- [x] Menghubungkan Apache Superset ke ClickHouse
+- [x] Membuat visualisasi KPI revenue dan order
+- [x] Membuat visualisasi performa produk dan channel
+- [x] Menggunakan `sales_forecast_ready` untuk analisis tren dan forecasting
+- [x] Menambahkan visualisasi Geospatial
 
 ---
 

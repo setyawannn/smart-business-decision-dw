@@ -188,6 +188,63 @@ ORDER BY customers DESC
             "total_monetary": "Float64",
         },
     },
+    "vw_geographic_performance": {
+        "sql": """
+SELECT
+    CASE 
+        WHEN upper(state) IN ('MAHARASHTRA') THEN 'IN-MH'
+        WHEN upper(state) IN ('KARNATAKA') THEN 'IN-KA'
+        WHEN upper(state) IN ('TAMIL NADU') THEN 'IN-TN'
+        WHEN upper(state) IN ('TELANGANA') THEN 'IN-TG'
+        WHEN upper(state) IN ('UTTAR PRADESH') THEN 'IN-UP'
+        WHEN upper(state) IN ('DELHI', 'NEW DELHI') THEN 'IN-DL'
+        WHEN upper(state) IN ('KERALA') THEN 'IN-KL'
+        WHEN upper(state) IN ('WEST BENGAL') THEN 'IN-WB'
+        WHEN upper(state) IN ('ANDHRA PRADESH') THEN 'IN-AP'
+        WHEN upper(state) IN ('GUJARAT') THEN 'IN-GJ'
+        WHEN upper(state) IN ('HARYANA') THEN 'IN-HR'
+        WHEN upper(state) IN ('RAJASTHAN', 'RJ', 'RAJSHTHAN', 'RAJSTHAN') THEN 'IN-RJ'
+        WHEN upper(state) IN ('MADHYA PRADESH') THEN 'IN-MP'
+        WHEN upper(state) IN ('ODISHA', 'ORISSA') THEN 'IN-OR'
+        WHEN upper(state) IN ('BIHAR') THEN 'IN-BR'
+        WHEN upper(state) IN ('PUNJAB', 'PB', 'PUNJAB/MOHALI/ZIRAKPUR') THEN 'IN-PB'
+        WHEN upper(state) IN ('ASSAM') THEN 'IN-AS'
+        WHEN upper(state) IN ('UTTARAKHAND') THEN 'IN-UT'
+        WHEN upper(state) IN ('JHARKHAND') THEN 'IN-JH'
+        WHEN upper(state) IN ('GOA') THEN 'IN-GA'
+        WHEN upper(state) IN ('CHHATTISGARH') THEN 'IN-CT'
+        WHEN upper(state) IN ('HIMACHAL PRADESH') THEN 'IN-HP'
+        WHEN upper(state) IN ('JAMMU & KASHMIR') THEN 'IN-JK'
+        WHEN upper(state) IN ('PUDUCHERRY', 'PONDICHERRY') THEN 'IN-PY'
+        WHEN upper(state) IN ('CHANDIGARH') THEN 'IN-CH'
+        WHEN upper(state) IN ('MANIPUR') THEN 'IN-MN'
+        WHEN upper(state) IN ('ANDAMAN & NICOBAR') THEN 'IN-AN'
+        WHEN upper(state) IN ('MEGHALAYA') THEN 'IN-ML'
+        WHEN upper(state) IN ('SIKKIM') THEN 'IN-SK'
+        WHEN upper(state) IN ('NAGALAND', 'NL') THEN 'IN-NL'
+        WHEN upper(state) IN ('TRIPURA') THEN 'IN-TR'
+        WHEN upper(state) IN ('ARUNACHAL PRADESH', 'AR') THEN 'IN-AR'
+        WHEN upper(state) IN ('MIZORAM') THEN 'IN-MZ'
+        WHEN upper(state) IN ('DADRA AND NAGAR') THEN 'IN-DN'
+        WHEN upper(state) IN ('LADAKH') THEN 'IN-LA'
+        WHEN upper(state) IN ('LAKSHADWEEP') THEN 'IN-LD'
+        ELSE 'UNKNOWN'
+    END AS iso_code,
+    state,
+    sum(revenue) AS total_revenue,
+    countDistinct(order_id) AS total_orders
+FROM smart_dw.silver_orders_clean
+WHERE state != 'Unknown' AND state != ''
+GROUP BY state
+ORDER BY total_revenue DESC
+""",
+        "columns": {
+            "iso_code": "String",
+            "state": "String",
+            "total_revenue": "Float64",
+            "total_orders": "UInt64",
+        },
+    },
 }
 
 
@@ -367,6 +424,7 @@ def main():
         products = datasets["vw_top_products_by_revenue"]
         channels = datasets["vw_channel_performance"]
         rfm = datasets["vw_customer_segment_distribution"]
+        geo = datasets["vw_geographic_performance"]
 
         charts = [
             get_or_create_chart(
@@ -620,6 +678,20 @@ def main():
                     labels_outside=True,
                     outerRadius=70,
                     innerRadius=45,
+                ),
+            ),
+            get_or_create_chart(
+                "Geographic Revenue (India)",
+                geo,
+                "country_map",
+                chart_params(
+                    geo,
+                    "country_map",
+                    select_country="india",
+                    entity="iso_code",
+                    metric="total_revenue",
+                    number_format="SMART_NUMBER",
+                    linear_color_scheme="lyftColors",
                 ),
             ),
         ]

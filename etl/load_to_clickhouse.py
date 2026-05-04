@@ -43,18 +43,21 @@ def main():
         "cost": pick_column(df, ["cost", "cogs", "expense"]),
         "profit": pick_column(df, ["profit", "gross_profit"]),
         "discount": pick_column(df, ["discount", "discount_rate"]),
-        "country": pick_column(df, ["country", "ship_country"])
+        "country": pick_column(df, ["country", "ship_country"]),
+        "state": pick_column(df, ["state", "ship_state"]),
+        "city": pick_column(df, ["city", "ship_city"])
     })
 
-    client = clickhouse_connect.get_client(
-        host="localhost",
-        port=8123,
-        username="default",
-        password="",
-        database="smart_dw"
-    )
+    bronze_df.to_csv("data/raw/temp_bronze.csv", index=False)
 
-    client.insert_df("bronze_orders_raw", bronze_df)
+    import subprocess
+    print("Loading data via docker exec...")
+    with open("data/raw/temp_bronze.csv", "rb") as f:
+        subprocess.run(
+            ["docker", "exec", "-i", "smart_dw_clickhouse", "clickhouse-client", "-q", "INSERT INTO smart_dw.bronze_orders_raw FORMAT CSVWithNames"],
+            stdin=f,
+            check=True
+        )
 
     print("SUCCESS: data berhasil dimuat ke bronze_orders_raw")
     print(f"Rows loaded: {len(bronze_df)}")

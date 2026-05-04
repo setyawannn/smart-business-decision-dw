@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS smart_dw.bronze_orders_raw
     profit String,
     discount String,
     country String,
+    state String,
+    city String,
     ingestion_time DateTime DEFAULT now()
 )
 ENGINE = MergeTree

@@ -58,3 +58,18 @@ SELECT
     countDistinct(order_id) AS total_orders
 FROM smart_dw.fact_sales
 GROUP BY order_date;
+
+CREATE TABLE IF NOT EXISTS smart_dw.geographic_performance_summary
+ENGINE = MergeTree
+ORDER BY state
+AS
+SELECT
+    c.state AS state,
+    c.city AS city,
+    sum(f.revenue) AS total_revenue,
+    sum(f.profit) AS total_profit,
+    countDistinct(f.order_id) AS total_orders
+FROM smart_dw.fact_sales AS f
+LEFT JOIN smart_dw.dim_customer AS c ON f.customer_id = c.customer_id
+WHERE c.state != 'Unknown'
+GROUP BY c.state, c.city;
