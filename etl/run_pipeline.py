@@ -1,3 +1,4 @@
+import csv
 import os
 from datetime import datetime
 import shutil
@@ -6,7 +7,6 @@ import traceback
 from pathlib import Path
 
 import clickhouse_connect
-import pandas as pd
 from kaggle.api.kaggle_api_extended import KaggleApi
 
 
@@ -22,8 +22,8 @@ PIPELINE_LOG_PATH = LOGS_DIR / "pipeline.log"
 CLICKHOUSE_HOST = os.getenv("CLICKHOUSE_HOST", "clickhouse")
 CLICKHOUSE_PORT = int(os.getenv("CLICKHOUSE_HTTP_PORT", "8123"))
 CLICKHOUSE_DB = os.getenv("CLICKHOUSE_DATABASE", "smart_dw")
-CLICKHOUSE_USER = os.getenv("CLICKHOUSE_SERVER_USER", "default")
-CLICKHOUSE_PASSWORD = os.getenv("CLICKHOUSE_SERVER_PASSWORD", "")
+CLICKHOUSE_USER = os.getenv("CLICKHOUSE_PIPELINE_USER", "pipeline")
+CLICKHOUSE_PASSWORD = os.getenv("CLICKHOUSE_PIPELINE_PASSWORD", "pipeline_lokal_kamu")
 PIPELINE_DEBUG_KEEPALIVE = os.getenv("PIPELINE_DEBUG_KEEPALIVE", "false").lower() == "true"
 PIPELINE_AUTO_DOWNLOAD = os.getenv("PIPELINE_AUTO_DOWNLOAD", "true").lower() == "true"
 PIPELINE_FORCE_DOWNLOAD = os.getenv("PIPELINE_FORCE_DOWNLOAD", "false").lower() == "true"
@@ -164,22 +164,15 @@ def ensure_dataset_available() -> None:
     download_dataset_from_kaggle()
 
 
-def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    df.columns = (
-        df.columns.str.strip()
-        .str.lower()
-        .str.replace(" ", "_")
-        .str.replace("-", "_")
-        .str.replace(".", "", regex=False)
-    )
-    return df
+def normalize_column_name(value: str) -> str:
+    return value.strip().lower().replace(" ", "_").replace("-", "_").replace(".", "")
 
 
-def pick_column(df: pd.DataFrame, candidates: list[str], default: str = "") -> pd.Series:
+def pick_column(row: dict[str, str], candidates: list[str], default: str = "") -> str:
     for col in candidates:
-        if col in df.columns:
-            return df[col].astype(str).fillna(default)
-    return pd.Series([default] * len(df))
+        if col in row and row[col] not in (None, ""):
+            return str(row[col])
+    return default
 
 
 def split_sql(sql: str) -> list[str]:
@@ -207,40 +200,56 @@ def run_sql_file(client: clickhouse_connect.driver.Client, path: Path) -> None:
         client.command(statement)
 
 
-def load_bronze_dataframe() -> pd.DataFrame:
+def load_bronze_rows() -> list[tuple[str, ...]]:
     ensure_dataset_available()
 
     try:
-        df = pd.read_csv(DATA_PATH, encoding="utf-8-sig")
+        rows = read_csv_rows("utf-8-sig")
     except UnicodeDecodeError:
         log("utf-8-sig decode failed, retrying with latin-1")
-        df = pd.read_csv(DATA_PATH, encoding="latin-1")
+        rows = read_csv_rows("latin-1")
 
-    df = normalize_columns(df)
-    log(f"normalized_columns={list(df.columns)}")
+    return rows
 
-    bronze_df = pd.DataFrame(
-        {
-            "order_id": pick_column(df, ["order_id", "orderid", "amazon_order_id", "order"]),
-            "order_date": pick_column(df, ["order_date", "date", "order_date_time", "ship_date"]),
-            "customer_id": pick_column(df, ["customer_id", "buyer_id", "customer"]),
-            "customer_name": pick_column(df, ["customer_name", "buyer_name", "name"]),
-            "product_id": pick_column(df, ["product_id", "sku", "style", "asin"]),
-            "product_name": pick_column(df, ["product_name", "item_name", "product"]),
-            "category": pick_column(df, ["category", "product_category"]),
-            "sub_category": pick_column(df, ["sub_category", "subcategory", "size"]),
-            "channel_name": pick_column(df, ["channel", "sales_channel", "platform", "fulfilled_by"]),
-            "quantity": pick_column(df, ["quantity", "qty"]),
-            "revenue": pick_column(df, ["revenue", "sales", "amount", "total_amount"]),
-            "cost": pick_column(df, ["cost", "cogs", "expense"]),
-            "profit": pick_column(df, ["profit", "gross_profit"]),
-            "discount": pick_column(df, ["discount", "discount_rate"]),
-            "country": pick_column(df, ["country", "ship_country"]),
-            "state": pick_column(df, ["state", "ship_state"]),
-            "city": pick_column(df, ["city", "ship_city"]),
-        }
-    )
-    return bronze_df
+
+def read_csv_rows(encoding: str) -> list[tuple[str, ...]]:
+    with DATA_PATH.open("r", encoding=encoding, newline="") as csv_file:
+        reader = csv.DictReader(csv_file)
+        if reader.fieldnames is None:
+            raise ValueError(f"CSV tidak memiliki header yang valid: {DATA_PATH}")
+
+        normalized_headers = [normalize_column_name(header) for header in reader.fieldnames]
+        log(f"normalized_columns={normalized_headers}")
+
+        bronze_rows: list[tuple[str, ...]] = []
+        for raw_row in reader:
+            normalized_row = {
+                normalize_column_name(str(key)): "" if value is None else str(value).strip()
+                for key, value in raw_row.items()
+                if key is not None
+            }
+            bronze_rows.append(
+                (
+                    pick_column(normalized_row, ["order_id", "orderid", "amazon_order_id", "order"]),
+                    pick_column(normalized_row, ["order_date", "date", "order_date_time", "ship_date"]),
+                    pick_column(normalized_row, ["customer_id", "buyer_id", "customer"]),
+                    pick_column(normalized_row, ["customer_name", "buyer_name", "name"]),
+                    pick_column(normalized_row, ["product_id", "sku", "style", "asin"]),
+                    pick_column(normalized_row, ["product_name", "item_name", "product"]),
+                    pick_column(normalized_row, ["category", "product_category"]),
+                    pick_column(normalized_row, ["sub_category", "subcategory", "size"]),
+                    pick_column(normalized_row, ["channel", "sales_channel", "platform", "fulfilled_by"]),
+                    pick_column(normalized_row, ["quantity", "qty"]),
+                    pick_column(normalized_row, ["revenue", "sales", "amount", "total_amount"]),
+                    pick_column(normalized_row, ["cost", "cogs", "expense"]),
+                    pick_column(normalized_row, ["profit", "gross_profit"]),
+                    pick_column(normalized_row, ["discount", "discount_rate"]),
+                    pick_column(normalized_row, ["country", "ship_country"]),
+                    pick_column(normalized_row, ["state", "ship_state"]),
+                    pick_column(normalized_row, ["city", "ship_city"]),
+                )
+            )
+        return bronze_rows
 
 
 def validate(client: clickhouse_connect.driver.Client) -> None:
@@ -289,8 +298,8 @@ def validate_clickhouse_connection(client: clickhouse_connect.driver.Client) -> 
 def main() -> None:
     describe_runtime_context()
     log("Loading raw Kaggle dataset...")
-    bronze_df = load_bronze_dataframe()
-    log(f"Rows prepared for bronze load: {len(bronze_df)}")
+    bronze_rows = load_bronze_rows()
+    log(f"Rows prepared for bronze load: {len(bronze_rows)}")
 
     log(f"Connecting to ClickHouse at {CLICKHOUSE_HOST}:{CLICKHOUSE_PORT}/{CLICKHOUSE_DB}")
     client = clickhouse_connect.get_client(
@@ -314,7 +323,29 @@ def main() -> None:
             break
 
     log("Inserting bronze data...")
-    client.insert_df("smart_dw.bronze_orders_raw", bronze_df)
+    client.insert(
+        "smart_dw.bronze_orders_raw",
+        bronze_rows,
+        column_names=[
+            "order_id",
+            "order_date",
+            "customer_id",
+            "customer_name",
+            "product_id",
+            "product_name",
+            "category",
+            "sub_category",
+            "channel_name",
+            "quantity",
+            "revenue",
+            "cost",
+            "profit",
+            "discount",
+            "country",
+            "state",
+            "city",
+        ],
+    )
 
     log("Running Silver and Gold transformations...")
     for sql_file in PIPELINE_SQL_FILES[1:]:

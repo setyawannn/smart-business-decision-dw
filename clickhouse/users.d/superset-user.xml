@@ -5,12 +5,21 @@
     </superset_readonly>
   </profiles>
   <users>
+    <pipeline>
+      <password>pipeline_lokal_kamu</password>
+      <quota>default</quota>
+      <networks>
+        <ip>::/0</ip>
+        <ip>0.0.0.0/0</ip>
+      </networks>
+    </pipeline>
     <superset>
       <password>superset_lokal_kamu</password>
       <profile>superset_readonly</profile>
       <quota>default</quota>
       <networks>
-        <ip>172.23.0.0/16</ip>
+        <ip>::/0</ip>
+        <ip>0.0.0.0/0</ip>
       </networks>
     </superset>
   </users>

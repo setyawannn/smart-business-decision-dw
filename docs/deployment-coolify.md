@@ -15,6 +15,7 @@ Dokumen ini mengikuti implementasi repo saat ini:
 - `shared_data` menyimpan file mentah agar tetap ada antar redeploy
 - `pipeline` mengunduh dataset Kaggle, menaruhnya ke lokasi final, lalu menjalankan seluruh ETL sekali jalan
 - `superset` menunggu pipeline selesai lalu melakukan bootstrap dashboard
+- pipeline tidak memakai `pandas/numpy`, jadi aman untuk CPU server lama yang tidak mendukung `X86_V2`
 
 Referensi resmi Coolify yang dipakai:
 
@@ -90,6 +91,8 @@ CLICKHOUSE_SERVER_USER=default
 CLICKHOUSE_SERVER_PASSWORD=
 CLICKHOUSE_USER=superset
 CLICKHOUSE_PASSWORD=change_this_superset_password
+CLICKHOUSE_PIPELINE_USER=pipeline
+CLICKHOUSE_PIPELINE_PASSWORD=pipeline_lokal_kamu
 
 PIPELINE_INPUT_FILE=amazon_sale_report.csv
 PIPELINE_DEBUG_KEEPALIVE=false
@@ -105,11 +108,13 @@ Catatan penting:
 
 - `CLICKHOUSE_SERVER_*` dipakai service ClickHouse internal
 - `CLICKHOUSE_USER` dan `CLICKHOUSE_PASSWORD` dipakai oleh Superset untuk koneksi read-only
+- `CLICKHOUSE_PIPELINE_USER` dan `CLICKHOUSE_PIPELINE_PASSWORD` dipakai ETL agar tidak bergantung pada user `default`
 - `PIPELINE_INPUT_FILE` adalah nama akhir file yang akan dipakai pipeline di folder `raw`
 - `PIPELINE_DEBUG_KEEPALIVE=true` hanya dipakai saat debugging agar container `pipeline` tidak langsung mati setelah gagal
 - `PIPELINE_AUTO_DOWNLOAD=true` membuat pipeline otomatis mengunduh dataset dari Kaggle saat deploy
 - `PIPELINE_FORCE_DOWNLOAD=true` memaksa file sumber diunduh ulang walaupun `/data/raw/amazon_sale_report.csv` sudah ada
 - `KAGGLE_SOURCE_FILENAME` adalah nama file CSV yang diharapkan di dalam arsip Kaggle
+- user ClickHouse `pipeline` dan `superset` dibuka untuk network Docker/Coolify lewat `clickhouse/users.d/superset-user.xml`
 
 ## Langkah 3: Deploy Sekali Jalan
 
@@ -288,6 +293,7 @@ Solusi:
   - kredensial Kaggle belum diisi
   - download Kaggle gagal
   - file CSV di dalam arsip tidak cocok
+  - kredensial user `pipeline` ClickHouse tidak cocok
   - koneksi ClickHouse gagal
   - parsing CSV gagal
   - SQL transform gagal
