@@ -91,6 +91,7 @@ CLICKHOUSE_USER=superset
 CLICKHOUSE_PASSWORD=change_this_superset_password
 
 PIPELINE_INPUT_FILE=amazon_sale_report.csv
+PIPELINE_DEBUG_KEEPALIVE=false
 ```
 
 Catatan penting:
@@ -98,6 +99,7 @@ Catatan penting:
 - `CLICKHOUSE_SERVER_*` dipakai service ClickHouse internal
 - `CLICKHOUSE_USER` dan `CLICKHOUSE_PASSWORD` dipakai oleh Superset untuk koneksi read-only
 - `PIPELINE_INPUT_FILE` menentukan nama file dataset utama di folder `raw` pada persistent storage
+- `PIPELINE_DEBUG_KEEPALIVE=true` hanya dipakai saat debugging agar container `pipeline` tidak langsung mati setelah gagal
 
 ## Langkah 3: Siapkan Dataset Kaggle
 
@@ -148,6 +150,12 @@ ls -lah /data/raw
 
 Pastikan file `amazon_sale_report.csv` ada dan ukurannya tidak nol.
 
+Kalau ingin lebih yakin, cek file persisnya:
+
+```bash
+ls -lah /data/raw/amazon_sale_report.csv
+```
+
 ## Langkah 4: Deploy Stack
 
 Klik `Deploy` di Coolify.
@@ -168,6 +176,10 @@ Pada deploy pertama, sangat wajar jika `superset` belum jalan sebelum `pipeline`
 Periksa log service `pipeline`. Anda harus melihat alur seperti:
 
 ```text
+[pipeline] dataset_path=/app/data/raw/amazon_sale_report.csv
+[pipeline] dataset_exists=True
+[pipeline] raw_directory_files=['amazon_sale_report.csv']
+[pipeline] clickhouse_context=host=clickhouse, port=8123, database=smart_dw, user=default
 Connecting to ClickHouse...
 Loading raw Kaggle dataset...
 Refreshing target tables...
@@ -176,6 +188,18 @@ Inserting bronze data...
 Running Silver and Gold transformations...
 Validation results:
 Pipeline completed successfully.
+```
+
+Kalau `pipeline` gagal terlalu cepat dan log sulit dibaca, ubah env berikut di Coolify lalu redeploy:
+
+```env
+PIPELINE_DEBUG_KEEPALIVE=true
+```
+
+Mode ini akan menahan container `pipeline` tetap hidup setelah error, sehingga Anda bisa membuka log dan terminal service dengan lebih mudah. Setelah debugging selesai, kembalikan ke:
+
+```env
+PIPELINE_DEBUG_KEEPALIVE=false
 ```
 
 ### Superset
@@ -243,7 +267,10 @@ clickhouse-client --database smart_dw --multiquery < /sql/validation/data_qualit
 Jika Anda mengganti file Kaggle dengan file baru:
 
 1. upload atau replace file di `/data/raw/amazon_sale_report.csv`
-2. lakukan `Redeploy` resource di Coolify
+2. verifikasi file dengan `ls -lah /data/raw/amazon_sale_report.csv`
+3. lakukan `Redeploy` resource di Coolify
+4. cek log service `pipeline`
+5. setelah `pipeline` sukses, cek `superset`
 
 Karena service `pipeline` melakukan refresh target table, hasil warehouse akan dibangun ulang dari file terbaru.
 
@@ -261,6 +288,19 @@ Solusi:
 
 - cek kembali file sudah berada di `/data/raw/amazon_sale_report.csv`
 - cek nama file sesuai `PIPELINE_INPUT_FILE`
+- cek log awal `pipeline` untuk `dataset_exists=False` atau `raw_directory_files=[]`
+
+### Pipeline gagal tetapi Coolify hanya menampilkan `exit 1`
+
+Solusi:
+
+- buka log service `pipeline` langsung dari UI Coolify, bukan hanya log deploy
+- bila log masih terlalu singkat, set `PIPELINE_DEBUG_KEEPALIVE=true` lalu redeploy
+- cocokkan error ke salah satu kategori:
+  - file input tidak ada
+  - koneksi ClickHouse gagal
+  - parsing CSV gagal
+  - SQL transform gagal
 
 ### Superset hidup tetapi chart kosong
 

@@ -1,4 +1,5 @@
 import os
+import traceback
 from pathlib import Path
 
 import clickhouse_connect
@@ -16,6 +17,7 @@ CLICKHOUSE_PORT = int(os.getenv("CLICKHOUSE_HTTP_PORT", "8123"))
 CLICKHOUSE_DB = os.getenv("CLICKHOUSE_DATABASE", "smart_dw")
 CLICKHOUSE_USER = os.getenv("CLICKHOUSE_SERVER_USER", "default")
 CLICKHOUSE_PASSWORD = os.getenv("CLICKHOUSE_SERVER_PASSWORD", "")
+PIPELINE_DEBUG_KEEPALIVE = os.getenv("PIPELINE_DEBUG_KEEPALIVE", "false").lower() == "true"
 
 PIPELINE_SQL_FILES = [
     SQL_DIR / "bronze" / "create_bronze_tables.sql",
@@ -39,6 +41,27 @@ REFRESH_STATEMENTS = [
     "DROP TABLE IF EXISTS smart_dw.sales_forecast_ready",
     "DROP TABLE IF EXISTS smart_dw.geographic_performance_summary",
 ]
+
+
+def log(message: str) -> None:
+    print(f"[pipeline] {message}", flush=True)
+
+
+def describe_runtime_context() -> None:
+    raw_files = []
+    if DATA_DIR.exists():
+        raw_files = sorted(path.name for path in DATA_DIR.iterdir())
+
+    log(f"dataset_path={DATA_PATH}")
+    log(f"dataset_exists={DATA_PATH.exists()}")
+    log(f"raw_directory={DATA_DIR}")
+    log(f"raw_directory_exists={DATA_DIR.exists()}")
+    log(f"raw_directory_files={raw_files}")
+    log(
+        "clickhouse_context="
+        f"host={CLICKHOUSE_HOST}, port={CLICKHOUSE_PORT}, database={CLICKHOUSE_DB}, user={CLICKHOUSE_USER}"
+    )
+    log(f"debug_keepalive={PIPELINE_DEBUG_KEEPALIVE}")
 
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -88,11 +111,18 @@ def load_bronze_dataframe() -> pd.DataFrame:
     if not DATA_PATH.exists():
         raise FileNotFoundError(
             f"Dataset tidak ditemukan: {DATA_PATH}. "
-            "Pastikan file Kaggle sudah diletakkan pada data/raw/amazon_sale_report.csv"
+            "Pastikan file Kaggle sudah diletakkan pada /data/raw/amazon_sale_report.csv "
+            "atau /app/data/raw/amazon_sale_report.csv"
         )
 
-    df = pd.read_csv(DATA_PATH)
+    try:
+        df = pd.read_csv(DATA_PATH, encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        log("utf-8-sig decode failed, retrying with latin-1")
+        df = pd.read_csv(DATA_PATH, encoding="latin-1")
+
     df = normalize_columns(df)
+    log(f"normalized_columns={list(df.columns)}")
 
     bronze_df = pd.DataFrame(
         {
@@ -140,13 +170,30 @@ def validate(client: clickhouse_connect.driver.Client) -> None:
         WHERE revenue < 0
         """
     )
-    print("Validation results:")
+    log("Validation results:")
     for row in checks.result_rows:
-        print(f"  {row[0]} = {row[1]}")
+        log(f"  {row[0]} = {row[1]}")
+
+
+def validate_clickhouse_connection(client: clickhouse_connect.driver.Client) -> None:
+    result = client.query(
+        """
+        SELECT
+            currentDatabase() AS current_database,
+            countIf(name = 'smart_dw') AS target_database_exists
+        FROM system.databases
+        """
+    )
+    current_database, target_database_exists = result.result_rows[0]
+    log(
+        "clickhouse_validation="
+        f"current_database={current_database}, target_database_exists={target_database_exists}"
+    )
 
 
 def main() -> None:
-    print(f"Connecting to ClickHouse at {CLICKHOUSE_HOST}:{CLICKHOUSE_PORT}/{CLICKHOUSE_DB}")
+    describe_runtime_context()
+    log(f"Connecting to ClickHouse at {CLICKHOUSE_HOST}:{CLICKHOUSE_PORT}/{CLICKHOUSE_DB}")
     client = clickhouse_connect.get_client(
         host=CLICKHOUSE_HOST,
         port=CLICKHOUSE_PORT,
@@ -154,31 +201,39 @@ def main() -> None:
         password=CLICKHOUSE_PASSWORD,
         database=CLICKHOUSE_DB,
     )
+    validate_clickhouse_connection(client)
 
-    print("Loading raw Kaggle dataset...")
+    log("Loading raw Kaggle dataset...")
     bronze_df = load_bronze_dataframe()
-    print(f"Rows prepared for bronze load: {len(bronze_df)}")
+    log(f"Rows prepared for bronze load: {len(bronze_df)}")
 
-    print("Refreshing target tables...")
+    log("Refreshing target tables...")
     for statement in REFRESH_STATEMENTS:
         client.command(statement)
 
-    print("Creating warehouse objects...")
+    log("Creating warehouse objects...")
     for sql_file in PIPELINE_SQL_FILES:
         if sql_file.name == "create_bronze_tables.sql":
+            log(f"Running SQL file: {sql_file}")
             run_sql_file(client, sql_file)
             break
 
-    print("Inserting bronze data...")
+    log("Inserting bronze data...")
     client.insert_df("smart_dw.bronze_orders_raw", bronze_df)
 
-    print("Running Silver and Gold transformations...")
+    log("Running Silver and Gold transformations...")
     for sql_file in PIPELINE_SQL_FILES[1:]:
+        log(f"Running SQL file: {sql_file}")
         run_sql_file(client, sql_file)
 
     validate(client)
-    print("Pipeline completed successfully.")
+    log("Pipeline completed successfully.")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        log(f"Pipeline failed: {exc}")
+        traceback.print_exc()
+        raise

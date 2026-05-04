@@ -1,2 +1,2 @@
-pandas
-clickhouse-connect
+pandas==3.0.2
+clickhouse-connect==0.15.1

@@ -36,12 +36,22 @@ services:
       - .env
     environment:
       PIPELINE_INPUT_FILE: ${PIPELINE_INPUT_FILE:-amazon_sale_report.csv}
+      PIPELINE_DEBUG_KEEPALIVE: ${PIPELINE_DEBUG_KEEPALIVE:-false}
     volumes:
       - shared_data:/app/data
     depends_on:
       clickhouse:
         condition: service_healthy
-    command: python /app/etl/run_pipeline.py
+    command: >
+      /bin/sh -c "
+      python /app/etl/run_pipeline.py;
+      rc=$$?;
+      if [ $$rc -ne 0 ] && [ \"$${PIPELINE_DEBUG_KEEPALIVE}\" = \"true\" ]; then
+        echo 'Pipeline failed; keeping container alive for Coolify debugging';
+        tail -f /dev/null;
+      fi;
+      exit $$rc
+      "
 
   superset:
     build:
