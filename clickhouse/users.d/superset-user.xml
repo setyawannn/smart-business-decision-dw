@@ -6,7 +6,7 @@
   </profiles>
   <users>
     <pipeline>
-      <password>pipeline_lokal_kamu</password>
+      <password from_env="CLICKHOUSE_PIPELINE_PASSWORD" />
       <quota>default</quota>
       <networks>
         <ip>::/0</ip>
@@ -14,7 +14,7 @@
       </networks>
     </pipeline>
     <superset>
-      <password>superset_lokal_kamu</password>
+      <password from_env="CLICKHOUSE_SUPERSET_PASSWORD" />
       <profile>superset_readonly</profile>
       <quota>default</quota>
       <networks>

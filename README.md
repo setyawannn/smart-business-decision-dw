@@ -338,42 +338,49 @@ docker ps
 
 ## 🚀 Deployment dengan Coolify (Production)
 
-Arsitektur aplikasi ini (*ClickHouse + Apache Superset*) juga dikonfigurasikan agar persisten dan tangguh untuk *Self-Hosted PaaS* seperti **Coolify**. Praktik pengimplementasian deployment-nya sebagai berikut:
+Arsitektur aplikasi ini (*ClickHouse + Apache Superset*) sudah disiapkan untuk deploy sekali jalan di **Coolify** memakai Docker Compose. `docker-compose.yml` menjadi sumber konfigurasi utama: ClickHouse berjalan internal, service `pipeline` menjalankan download Kaggle dan ETL otomatis, lalu Superset melakukan bootstrap dashboard.
 
 **1. Konfigurasi Repositori Git**
 * Tambahkan Repositori ini ke *Coolify Applications* dengan metode **"Docker Compose"**.
 * Konfigurasi Branch ke komit terbaru Anda (`main`).
+* Pastikan compose file yang dipakai adalah `docker-compose.yml`.
 
-**2. Kaggle Dataset pada Environment Produksi**
-Mengingat ukuran dataset melebihi batas GIT standard (sekitar ~15MB+) dan sering masuk ke `.gitignore`, pada dasbor kontrol Coolify isi *Pre-deployment Command* atau jalankan pada terminal *Container/Host server* Anda:
-```bash
-# Instal Kaggle jika tidak bawaan
-pip install kaggle
-
-# Unduh dan Rapikan Otomatis Database Raw
-bash scripts/download_dataset.sh
-```
-*(Ingat untuk juga memasukkan file autentikasi `kaggle.json` ke direktori spesifik server tersebut jika mengunduhnya secara remote).*
-
-**3. Konfigurasi Environment (Variables)**
-Masukkan semua kredensial `.env` pada GUI Coolify:
+**2. Konfigurasi Environment Variables**
+Masukkan environment variable berikut pada GUI Coolify. Kaggle credential cukup lewat env; tidak perlu upload `kaggle.json` atau menjalankan pre-deployment command manual.
 ```ini
+SUPERSET_SECRET_KEY=change_this_with_a_long_random_secret
+SUPERSET_ADMIN_USERNAME=admin
+SUPERSET_ADMIN_PASSWORD=change_this_admin_password
+SUPERSET_ADMIN_EMAIL=admin@example.com
+SUPERSET_ADMIN_FIRSTNAME=Smart
+SUPERSET_ADMIN_LASTNAME=DW
+SUPERSET_PORT=8088
+
+CLICKHOUSE_HOST=clickhouse
+CLICKHOUSE_HTTP_PORT=8123
 CLICKHOUSE_DATABASE=smart_dw
 CLICKHOUSE_SERVER_USER=default
 CLICKHOUSE_SERVER_PASSWORD=
+CLICKHOUSE_USER=superset
+CLICKHOUSE_PASSWORD=change_this_superset_password
+CLICKHOUSE_PIPELINE_USER=pipeline
+CLICKHOUSE_PIPELINE_PASSWORD=change_this_pipeline_password
 
-SUPERSET_PORT=8088
-SUPERSET_ADMIN_USERNAME=admin
-SUPERSET_ADMIN_PASSWORD=admin
-SUPERSET_ADMIN_EMAIL=admin@superset.com
-SUPERSET_ADMIN_FIRSTNAME=Smart
-SUPERSET_ADMIN_LASTNAME=DW
+PIPELINE_INPUT_FILE=amazon_sale_report.csv
+PIPELINE_DEBUG_KEEPALIVE=false
+PIPELINE_AUTO_DOWNLOAD=true
+PIPELINE_FORCE_DOWNLOAD=false
+KAGGLE_DATASET=thedevastator/unlock-profits-with-e-commerce-sales-data
+KAGGLE_SOURCE_FILENAME=Amazon Sale Report.csv
+KAGGLE_USERNAME=your_kaggle_username
+KAGGLE_KEY=your_kaggle_key
 ```
 
-**4. Networking Coolify**
-Secara nirkabel Coolify (Traefik) akan memetakan *Reverse Proxy* ke layanan `Superset`.
-* Atur Port di UI Coolify untuk mengekspos public IP ke service `superset` melaui Port `8088`.
-* Tunggu sekitar 2-3 menit sewaktu tahap inisiasi (*creating user & bootstrap dashboard*) selesai hingga notifikasi `Bootstrapped Smart DW` terbit pada Log Deploy.
+**3. Deploy dan Networking**
+* Klik `Deploy`. Urutan otomatisnya: `clickhouse` healthy -> `pipeline` sukses -> `superset` start.
+* Arahkan domain Coolify ke service `superset` dengan container port `8088`.
+* ClickHouse tidak perlu diekspos public; service lain mengaksesnya lewat network internal Docker Compose.
+* Tunggu hingga log `pipeline` berisi `Pipeline completed successfully` dan log `superset` berisi `Bootstrapped Smart DW ClickHouse and Smart Business Decision Dashboard`.
 
 ---
 
