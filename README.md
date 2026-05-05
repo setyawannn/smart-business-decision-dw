@@ -378,7 +378,7 @@ KAGGLE_KEY=your_kaggle_key
 * Klik `Deploy`. Urutan otomatisnya: `clickhouse` healthy -> `pipeline` sukses -> `superset` start.
 * Arahkan domain Coolify ke service `superset` dengan container port `8088`.
 * ClickHouse tidak perlu diekspos public; service lain mengaksesnya lewat network internal Docker Compose.
-* Tunggu hingga log `pipeline` berisi `Pipeline completed successfully` dan log `superset` berisi `Bootstrapped Smart DW ClickHouse and Smart Business Decision Dashboard`.
+* Tunggu hingga log `pipeline` berisi `Pipeline completed successfully` dan log `superset` berisi `[superset-start] Starting Superset web server on 0.0.0.0:8088`.
 
 ---
 

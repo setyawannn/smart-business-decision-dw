@@ -200,9 +200,16 @@ PIPELINE_DEBUG_KEEPALIVE=false
 Periksa log service `superset`. Anda harus melihat:
 
 ```text
+[superset-start] Starting Superset database migration
+[superset-start] Creating Superset admin user if needed
+[superset-start] Initializing Superset permissions and roles
+[superset-start] Bootstrapping Smart DW database, datasets, charts, and dashboard
 Bootstrapped Smart DW ClickHouse and Smart Business Decision Dashboard
+[superset-start] Starting Superset web server on 0.0.0.0:8088
 Running on http://0.0.0.0:8088
 ```
+
+Jika log berhenti lama di `Starting Superset database migration`, masalahnya berada di metadata DB/volume Superset, bukan di pipeline ClickHouse. Untuk deploy pertama yang belum punya dashboard penting, reset volume `superset_home` lalu redeploy agar SQLite metadata dibuat ulang bersih.
 
 ## Langkah 5: Buka Dashboard
 
