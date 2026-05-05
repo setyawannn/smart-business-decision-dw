@@ -31,7 +31,8 @@ services:
       dockerfile: etl/Dockerfile
     container_name: smart_dw_pipeline
     restart: "no"
-    exclude_from_hc: true
+    x-coolify:
+      exclude_from_hc: true
     env_file:
       - .env
     environment:

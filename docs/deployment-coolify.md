@@ -15,6 +15,8 @@ Dokumen ini mengikuti implementasi repo saat ini:
 - `shared_data` menyimpan file mentah agar tetap ada antar redeploy
 - `pipeline` mengunduh dataset Kaggle, menaruhnya ke lokasi final, lalu menjalankan seluruh ETL sekali jalan
 - `superset` menunggu pipeline selesai lalu melakukan bootstrap dashboard
+- `pipeline` diberi metadata `x-coolify.exclude_from_hc: true` agar intent Coolify terdokumentasi tanpa merusak validasi Docker Compose standar
+- ClickHouse berjalan sebagai service internal; hanya Superset yang perlu diarahkan ke domain publik
 - pipeline tidak memakai `pandas/numpy`, jadi aman untuk CPU server lama yang tidak mendukung `X86_V2`
 
 Referensi resmi Coolify yang dipakai:
@@ -92,7 +94,7 @@ CLICKHOUSE_SERVER_PASSWORD=
 CLICKHOUSE_USER=superset
 CLICKHOUSE_PASSWORD=change_this_superset_password
 CLICKHOUSE_PIPELINE_USER=pipeline
-CLICKHOUSE_PIPELINE_PASSWORD=pipeline_lokal_kamu
+CLICKHOUSE_PIPELINE_PASSWORD=change_this_pipeline_password
 
 PIPELINE_INPUT_FILE=amazon_sale_report.csv
 PIPELINE_DEBUG_KEEPALIVE=false
@@ -109,6 +111,7 @@ Catatan penting:
 - `CLICKHOUSE_SERVER_*` dipakai service ClickHouse internal
 - `CLICKHOUSE_USER` dan `CLICKHOUSE_PASSWORD` dipakai oleh Superset untuk koneksi read-only
 - `CLICKHOUSE_PIPELINE_USER` dan `CLICKHOUSE_PIPELINE_PASSWORD` dipakai ETL agar tidak bergantung pada user `default`
+- password user ClickHouse `pipeline` dan `superset` dibaca dari environment runtime, bukan hardcoded di XML
 - `PIPELINE_INPUT_FILE` adalah nama akhir file yang akan dipakai pipeline di folder `raw`
 - `PIPELINE_DEBUG_KEEPALIVE=true` hanya dipakai saat debugging agar container `pipeline` tidak langsung mati setelah gagal
 - `PIPELINE_AUTO_DOWNLOAD=true` membuat pipeline otomatis mengunduh dataset dari Kaggle saat deploy
@@ -129,6 +132,8 @@ Klik `Deploy` pada resource Coolify. Saat deploy:
 3. file CSV di-rename ke `/data/raw/amazon_sale_report.csv`
 4. ETL Bronze -> Silver -> Gold berjalan
 5. `superset` bootstrap dan start
+
+Untuk domain publik, pilih service `superset` dan arahkan domain ke container port `8088`. Jangan expose service `clickhouse` kecuali benar-benar diperlukan untuk debugging, karena Superset dan pipeline sudah mengaksesnya melalui network internal Compose.
 
 ### 3B. Deploy dari terminal lokal
 
@@ -168,16 +173,15 @@ Periksa log service `pipeline`. Anda harus melihat alur seperti:
 [pipeline] kaggle_credentials_present=True
 [pipeline] Loading raw Kaggle dataset...
 [pipeline] Starting Kaggle dataset download...
-[pipeline] Extracting downloaded archive: ...
 [pipeline] Copied dataset source Amazon Sale Report.csv to /app/data/raw/amazon_sale_report.csv
-[pipeline] clickhouse_context=host=clickhouse, port=8123, database=smart_dw, user=default
-Connecting to ClickHouse...
-Refreshing target tables...
-Creating warehouse objects...
-Inserting bronze data...
-Running Silver and Gold transformations...
-Validation results:
-Pipeline completed successfully.
+[pipeline] clickhouse_context=host=clickhouse, port=8123, database=smart_dw, user=pipeline
+[pipeline] Connecting to ClickHouse at clickhouse:8123/smart_dw
+[pipeline] Refreshing target tables...
+[pipeline] Creating warehouse objects...
+[pipeline] Inserting bronze data...
+[pipeline] Running Silver and Gold transformations...
+[pipeline] Validation results:
+[pipeline] Pipeline completed successfully.
 ```
 
 Kalau `pipeline` gagal terlalu cepat dan log sulit dibaca, ubah env berikut di Coolify lalu redeploy:
@@ -203,7 +207,7 @@ Running on http://0.0.0.0:8088
 
 ## Langkah 5: Buka Dashboard
 
-Expose service `superset` di Coolify menggunakan domain atau subdomain.
+Expose service `superset` di Coolify menggunakan domain atau subdomain. Karena Superset listen di container port `8088`, isi domain service Superset dengan port tersebut, misalnya `https://bi.example.com:8088` di field domain Coolify.
 
 Contoh:
 
@@ -311,7 +315,7 @@ Solusi:
 Solusi:
 
 - pastikan `CLICKHOUSE_USER=superset`
-- pastikan `CLICKHOUSE_PASSWORD` sama dengan yang dipakai di `clickhouse/users.d/superset-user.xml`
+- pastikan `CLICKHOUSE_PASSWORD` di Coolify sama dengan password user `superset` yang dibaca ClickHouse dari environment
 - redeploy resource setelah mengubah env
 
 ## Rekomendasi Showcase
@@ -320,9 +324,8 @@ Agar deployment kelihatan matang saat presentasi:
 
 1. Siapkan subdomain khusus dashboard
 2. Gunakan password admin yang rapi dan aman
-3. Simpan langkah Kaggle download di terminal history atau catatan presentasi
-4. Tunjukkan log `pipeline` sukses
-5. Tunjukkan dashboard sudah otomatis muncul tanpa eksekusi SQL manual
+3. Tunjukkan log `pipeline` sukses
+4. Tunjukkan dashboard sudah otomatis muncul tanpa eksekusi SQL manual
 
 ## File Repo yang Mendukung Deploy Ini
 

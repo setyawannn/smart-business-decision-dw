@@ -386,24 +386,29 @@ KAGGLE_KEY=your_kaggle_key
 
 ## ⚙️ Menjalankan Pipeline dari Data Mentah Hingga Dashboard
 
-Jalankan fungsi pipeline berikut secara berurutan:
+Tidak perlu menjalankan `docker exec` satu per satu. Semua tahap pipeline sudah diorkestrasi oleh service `pipeline` dan bootstrap Superset.
 
-| Tahap | Engine | Perintah / Script Command | Fungsi |
-|------|-------|----------|-----------|
-| **1. Init DDL** | ClickHouse | `docker exec -i smart_dw_clickhouse clickhouse-client < sql/bronze/create_bronze_tables.sql` | Buat tabel layer Bronze awal. |
-| **2. Ingestion**| Python ETL | `python etl/load_to_clickhouse.py` | Ekstraksi raw CSV & upload ke kontainer DB. |
-| **3. Clean** | ClickHouse | `docker exec -i smart_dw_clickhouse clickhouse-client < sql/silver/transform_silver_orders.sql` | Olah Bronze ke Silver Layer. |
-| **4. Warehouse**| ClickHouse | `docker exec -i smart_dw_clickhouse clickhouse-client < sql/gold/create_dimensions.sql` <br> `docker exec -i smart_dw_clickhouse clickhouse-client < sql/gold/create_fact_sales.sql` | Membangun Medallion Gold Layer. |
-| **5. Data Mart**| ClickHouse | `docker exec -i smart_dw_clickhouse clickhouse-client < sql/gold/create_analytical_tables.sql` | Menjalankan agregasi analitik (termasuk segmentasi RFM). |
-| **6. Dashboard**| Superset | `docker exec -i smart_dw_superset sh -c "python /app/bootstrap/bootstrap_superset.py"` | Sinkronisasi metadata, koneksi visualisasi bagan, dan layout Dashboard otomatis 🚀 |
+```bash
+docker compose up -d --build
+```
+
+Urutan otomatis:
+
+1. ClickHouse start dan healthcheck siap.
+2. Dataset Kaggle diunduh ke volume `shared_data`.
+3. CSV utama disalin sebagai `/app/data/raw/amazon_sale_report.csv`.
+4. Bronze, Silver, Gold, dan tabel analitik dibuat ulang.
+5. Validasi data berjalan dan ditulis ke log pipeline.
+6. Superset membuat admin, koneksi ClickHouse, dataset, chart, dan dashboard.
+
 
 ### 🎉 Mengakses Dashboard
-Setelah Perintah ke-6 berhasil dijalankan dengan keterangan `Bootstrapped Smart Business Decision Dashboard`, buka browser Anda:
+Setelah log Superset menampilkan bootstrap berhasil, buka browser Anda:
 
 - **Akses URL:** [http://localhost:8088](http://localhost:8088)
 - **Login:**
   - Username: `admin`
-  - Password: `admin`
+  - Password: sesuai `SUPERSET_ADMIN_PASSWORD`
 
 Klik menu **Dashboards** > lalu buka **Smart Business Decision Dashboard**. Anda akan melihat data hasil warehouse Anda divisualisasikan dengan apik!
 
