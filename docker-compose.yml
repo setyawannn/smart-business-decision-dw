@@ -88,8 +88,6 @@ services:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-superset}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD is required}
     volumes:
-      - ./superset/config/superset_config.py:/app/pythonpath/superset_config.py
-      - ./superset/bootstrap:/app/bootstrap
       - superset_home:/app/superset_home
     depends_on:
       clickhouse:

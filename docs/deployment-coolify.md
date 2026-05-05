@@ -16,6 +16,7 @@ Dokumen ini mengikuti implementasi repo saat ini:
 - `pipeline` mengunduh dataset Kaggle, menaruhnya ke lokasi final, lalu menjalankan seluruh ETL sekali jalan
 - `superset` menunggu pipeline selesai lalu melakukan bootstrap dashboard
 - `pipeline` diberi metadata `x-coolify.exclude_from_hc: true` agar intent Coolify terdokumentasi tanpa merusak validasi Docker Compose standar
+- config dan bootstrap Superset dibake ke image Superset, bukan bergantung pada bind mount source repo
 - ClickHouse berjalan sebagai service internal; hanya Superset yang perlu diarahkan ke domain publik
 - pipeline tidak memakai `pandas/numpy`, jadi aman untuk CPU server lama yang tidak mendukung `X86_V2`
 
