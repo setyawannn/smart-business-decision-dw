@@ -22,8 +22,10 @@ PIPELINE_LOG_PATH = LOGS_DIR / "pipeline.log"
 CLICKHOUSE_HOST = os.getenv("CLICKHOUSE_HOST", "clickhouse")
 CLICKHOUSE_PORT = int(os.getenv("CLICKHOUSE_HTTP_PORT", "8123"))
 CLICKHOUSE_DB = os.getenv("CLICKHOUSE_DATABASE", "smart_dw")
-CLICKHOUSE_USER = os.getenv("CLICKHOUSE_PIPELINE_USER", "pipeline")
-CLICKHOUSE_PASSWORD = os.getenv("CLICKHOUSE_PIPELINE_PASSWORD", "pipeline_lokal_kamu")
+CLICKHOUSE_USER = os.getenv("CLICKHOUSE_PIPELINE_USER", os.getenv("CLICKHOUSE_SERVER_USER", "default"))
+CLICKHOUSE_PASSWORD = os.getenv("CLICKHOUSE_PIPELINE_PASSWORD", os.getenv("CLICKHOUSE_SERVER_PASSWORD", ""))
+SUPERSET_CLICKHOUSE_USER = os.getenv("CLICKHOUSE_USER", "superset")
+SUPERSET_CLICKHOUSE_PASSWORD = os.getenv("CLICKHOUSE_PASSWORD", "superset_lokal_kamu")
 PIPELINE_DEBUG_KEEPALIVE = os.getenv("PIPELINE_DEBUG_KEEPALIVE", "false").lower() == "true"
 PIPELINE_AUTO_DOWNLOAD = os.getenv("PIPELINE_AUTO_DOWNLOAD", "true").lower() == "true"
 PIPELINE_FORCE_DOWNLOAD = os.getenv("PIPELINE_FORCE_DOWNLOAD", "false").lower() == "true"
@@ -200,6 +202,24 @@ def run_sql_file(client: clickhouse_connect.driver.Client, path: Path) -> None:
         client.command(statement)
 
 
+def quote_sql_string(value: str) -> str:
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def quote_identifier(value: str) -> str:
+    return "`" + value.replace("`", "``") + "`"
+
+
+def ensure_superset_user(client: clickhouse_connect.driver.Client) -> None:
+    log(f"Ensuring ClickHouse user for Superset exists: {SUPERSET_CLICKHOUSE_USER}")
+    user = quote_identifier(SUPERSET_CLICKHOUSE_USER)
+    password = quote_sql_string(SUPERSET_CLICKHOUSE_PASSWORD)
+    database = quote_identifier(CLICKHOUSE_DB)
+    client.command(f"CREATE USER IF NOT EXISTS {user} IDENTIFIED BY {password}")
+    client.command(f"ALTER USER {user} IDENTIFIED BY {password}")
+    client.command(f"GRANT SELECT ON {database}.* TO {user}")
+
+
 def load_bronze_rows() -> list[tuple[str, ...]]:
     ensure_dataset_available()
 
@@ -310,6 +330,7 @@ def main() -> None:
         database=CLICKHOUSE_DB,
     )
     validate_clickhouse_connection(client)
+    ensure_superset_user(client)
 
     log("Refreshing target tables...")
     for statement in REFRESH_STATEMENTS:

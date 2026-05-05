@@ -90,11 +90,9 @@ CLICKHOUSE_HTTP_PORT=8123
 CLICKHOUSE_NATIVE_PORT=9000
 CLICKHOUSE_DATABASE=smart_dw
 CLICKHOUSE_SERVER_USER=default
-CLICKHOUSE_SERVER_PASSWORD=
+CLICKHOUSE_SERVER_PASSWORD=change_this_clickhouse_admin_password
 CLICKHOUSE_USER=superset
 CLICKHOUSE_PASSWORD=change_this_superset_password
-CLICKHOUSE_PIPELINE_USER=pipeline
-CLICKHOUSE_PIPELINE_PASSWORD=change_this_pipeline_password
 
 PIPELINE_INPUT_FILE=amazon_sale_report.csv
 PIPELINE_DEBUG_KEEPALIVE=false
@@ -108,16 +106,16 @@ KAGGLE_KEY=your_kaggle_key
 
 Catatan penting:
 
-- `CLICKHOUSE_SERVER_*` dipakai service ClickHouse internal
+- `CLICKHOUSE_SERVER_*` dipakai service ClickHouse internal dan pipeline admin; `CLICKHOUSE_SERVER_PASSWORD` wajib diisi agar ClickHouse tidak menonaktifkan akses network user `default`
+- compose mengaktifkan `CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1` agar pipeline bisa membuat atau memperbarui user Superset
 - `CLICKHOUSE_USER` dan `CLICKHOUSE_PASSWORD` dipakai oleh Superset untuk koneksi read-only
-- `CLICKHOUSE_PIPELINE_USER` dan `CLICKHOUSE_PIPELINE_PASSWORD` dipakai ETL agar tidak bergantung pada user `default`
-- password user ClickHouse `pipeline` dan `superset` dibaca dari environment runtime, bukan hardcoded di XML
+- pipeline membuat atau memperbarui user Superset read-only dari `CLICKHOUSE_USER` dan `CLICKHOUSE_PASSWORD`
 - `PIPELINE_INPUT_FILE` adalah nama akhir file yang akan dipakai pipeline di folder `raw`
 - `PIPELINE_DEBUG_KEEPALIVE=true` hanya dipakai saat debugging agar container `pipeline` tidak langsung mati setelah gagal
 - `PIPELINE_AUTO_DOWNLOAD=true` membuat pipeline otomatis mengunduh dataset dari Kaggle saat deploy
 - `PIPELINE_FORCE_DOWNLOAD=true` memaksa file sumber diunduh ulang walaupun `/data/raw/amazon_sale_report.csv` sudah ada
 - `KAGGLE_SOURCE_FILENAME` adalah nama file CSV yang diharapkan di dalam arsip Kaggle
-- user ClickHouse `pipeline` dan `superset` dibuka untuk network Docker/Coolify lewat `clickhouse/users.d/superset-user.xml`
+- user ClickHouse Superset dibuat otomatis oleh pipeline, jadi tidak perlu mount konfigurasi user XML tambahan
 
 ## Langkah 3: Deploy Sekali Jalan
 
@@ -174,8 +172,9 @@ Periksa log service `pipeline`. Anda harus melihat alur seperti:
 [pipeline] Loading raw Kaggle dataset...
 [pipeline] Starting Kaggle dataset download...
 [pipeline] Copied dataset source Amazon Sale Report.csv to /app/data/raw/amazon_sale_report.csv
-[pipeline] clickhouse_context=host=clickhouse, port=8123, database=smart_dw, user=pipeline
+[pipeline] clickhouse_context=host=clickhouse, port=8123, database=smart_dw, user=default
 [pipeline] Connecting to ClickHouse at clickhouse:8123/smart_dw
+[pipeline] Ensuring ClickHouse user for Superset exists: superset
 [pipeline] Refreshing target tables...
 [pipeline] Creating warehouse objects...
 [pipeline] Inserting bronze data...
@@ -315,7 +314,7 @@ Solusi:
 Solusi:
 
 - pastikan `CLICKHOUSE_USER=superset`
-- pastikan `CLICKHOUSE_PASSWORD` di Coolify sama dengan password user `superset` yang dibaca ClickHouse dari environment
+- pastikan `CLICKHOUSE_PASSWORD` di Coolify sama dengan password user Superset yang dibuat pipeline
 - redeploy resource setelah mengubah env
 
 ## Rekomendasi Showcase
