@@ -616,6 +616,40 @@ def chart_params(dataset, viz_type, **overrides):
     return params
 
 
+def mini_trend_params(dataset, metric, y_axis_format="SMART_NUMBER"):
+    return chart_params(
+        dataset,
+        "echarts_timeseries_line",
+        metrics=[metric],
+        x_axis="snapshot_date",
+        time_grain_sqla="P1D",
+        x_axis_sort_asc=True,
+        x_axis_sort_series="name",
+        x_axis_sort_series_ascending=True,
+        adhoc_filters=[],
+        order_desc=True,
+        row_limit=10000,
+        truncate_metric=True,
+        show_empty_columns=True,
+        comparison_type="values",
+        annotation_layers=[],
+        seriesType="echarts_timeseries_line",
+        only_total=True,
+        opacity=0.25,
+        markerSize=0,
+        show_legend=False,
+        x_axis_time_format="smart_date",
+        rich_tooltip=True,
+        tooltipTimeFormat="smart_date",
+        y_axis_format=y_axis_format,
+        truncateXAxis=True,
+        y_axis_bounds=[None, None],
+        x_axis_title="",
+        y_axis_title="",
+        time_range="No filter",
+    )
+
+
 def temporal_filter(column):
     return {
         "clause": "WHERE",
@@ -871,6 +905,30 @@ def main():
                     comparison_type="percentage",
                     show_trend_line=True,
                 ),
+            ),
+            get_or_create_chart(
+                "Mini Revenue Trend",
+                kpi_daily,
+                "echarts_timeseries_line",
+                mini_trend_params(kpi_daily, "total_revenue"),
+            ),
+            get_or_create_chart(
+                "Mini Orders Trend",
+                kpi_daily,
+                "echarts_timeseries_line",
+                mini_trend_params(kpi_daily, "total_orders"),
+            ),
+            get_or_create_chart(
+                "Mini Quantity Trend",
+                kpi_daily,
+                "echarts_timeseries_line",
+                mini_trend_params(kpi_daily, "total_quantity_sold"),
+            ),
+            get_or_create_chart(
+                "Mini AOV Trend",
+                kpi_daily,
+                "echarts_timeseries_line",
+                mini_trend_params(kpi_daily, "average_order_value"),
             ),
             get_or_create_chart(
                 "KPI Performance Status",
@@ -1288,15 +1346,21 @@ def main():
                 [
                     charts[:4],
                     [
-                        {"slice": charts[17], "width": 8, "height": 96},
-                        {"slice": charts[14], "width": 4, "height": 72},
+                        {"slice": charts[4], "width": 3, "height": 32},
+                        {"slice": charts[5], "width": 3, "height": 32},
+                        {"slice": charts[6], "width": 3, "height": 32},
+                        {"slice": charts[7], "width": 3, "height": 32},
                     ],
-                    [charts[6], charts[5]],
-                    [charts[7], charts[8], charts[9]],
-                    [{"slice": charts[4], "width": 12, "height": 96}],
-                    [charts[10], charts[11]],
-                    [charts[12], charts[13]],
-                    [charts[15], charts[16]],
+                    [
+                        {"slice": charts[21], "width": 8, "height": 96},
+                        {"slice": charts[18], "width": 4, "height": 72},
+                    ],
+                    [charts[10], charts[9]],
+                    [charts[11], charts[12], charts[13]],
+                    [{"slice": charts[8], "width": 12, "height": 96}],
+                    [charts[14], charts[15]],
+                    [charts[16], charts[17]],
+                    [charts[19], charts[20]],
                 ]
             )
         )
