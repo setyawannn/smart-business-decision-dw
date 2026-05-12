@@ -43,6 +43,7 @@ PIPELINE_SQL_FILES = [
     SQL_DIR / "gold" / "create_dimensions.sql",
     SQL_DIR / "gold" / "create_fact_sales.sql",
     SQL_DIR / "gold" / "create_analytical_tables.sql",
+    SQL_DIR / "gold" / "create_sales_forecast_result.sql",
 ]
 
 REFRESH_STATEMENTS = [
@@ -57,7 +58,11 @@ REFRESH_STATEMENTS = [
     "DROP TABLE IF EXISTS smart_dw.channel_performance_summary",
     "DROP TABLE IF EXISTS smart_dw.product_profitability_summary",
     "DROP TABLE IF EXISTS smart_dw.sales_forecast_ready",
+    "DROP TABLE IF EXISTS smart_dw.kpi_daily_snapshot",
+    "DROP TABLE IF EXISTS smart_dw.geographic_daily_summary",
+    "DROP TABLE IF EXISTS smart_dw.channel_monthly_summary",
     "DROP TABLE IF EXISTS smart_dw.geographic_performance_summary",
+    "DROP TABLE IF EXISTS smart_dw.sales_forecast_result",
 ]
 
 
@@ -315,6 +320,129 @@ def validate_clickhouse_connection(client: clickhouse_connect.driver.Client) -> 
     )
 
 
+def build_baseline_forecast(client: clickhouse_connect.driver.Client) -> None:
+    log("Building baseline forecast rows for sales_forecast_result...")
+    client.command("TRUNCATE TABLE IF EXISTS smart_dw.sales_forecast_result")
+    client.command(
+        """
+        INSERT INTO smart_dw.sales_forecast_result
+        (sales_date, metric_name, actual_value, forecast_value, lower_bound, upper_bound, model_name)
+        WITH
+        revenue_history AS (
+            SELECT
+                sales_date,
+                toFloat64(total_revenue) AS actual_value
+            FROM smart_dw.sales_forecast_ready
+            ORDER BY sales_date
+        ),
+        revenue_stats AS (
+            SELECT
+                avg(actual_value) AS avg_value,
+                stddevPop(actual_value) AS sigma,
+                max(sales_date) AS max_sales_date
+            FROM revenue_history
+        ),
+        revenue_last_7 AS (
+            SELECT avg(actual_value) AS last_7_avg
+            FROM (
+                SELECT actual_value
+                FROM revenue_history
+                ORDER BY sales_date DESC
+                LIMIT 7
+            )
+        ),
+        order_history AS (
+            SELECT
+                sales_date,
+                toFloat64(total_orders) AS actual_value
+            FROM smart_dw.sales_forecast_ready
+            ORDER BY sales_date
+        ),
+        order_stats AS (
+            SELECT
+                avg(actual_value) AS avg_value,
+                stddevPop(actual_value) AS sigma,
+                max(sales_date) AS max_sales_date
+            FROM order_history
+        ),
+        order_last_7 AS (
+            SELECT avg(actual_value) AS last_7_avg
+            FROM (
+                SELECT actual_value
+                FROM order_history
+                ORDER BY sales_date DESC
+                LIMIT 7
+            )
+        )
+        SELECT
+            sales_date,
+            metric_name,
+            actual_value,
+            forecast_value,
+            lower_bound,
+            upper_bound,
+            model_name
+        FROM (
+            SELECT
+                sales_date,
+                'Revenue' AS metric_name,
+                actual_value,
+                CAST(NULL, 'Nullable(Float64)') AS forecast_value,
+                CAST(NULL, 'Nullable(Float64)') AS lower_bound,
+                CAST(NULL, 'Nullable(Float64)') AS upper_bound,
+                'actual_history' AS model_name
+            FROM revenue_history
+
+            UNION ALL
+
+            SELECT
+                addDays(max_sales_date, horizon) AS sales_date,
+                'Revenue' AS metric_name,
+                CAST(NULL, 'Nullable(Float64)') AS actual_value,
+                toFloat64(last_7_avg) AS forecast_value,
+                greatest(toFloat64(last_7_avg) - ifNull(toFloat64(sigma), 0), 0) AS lower_bound,
+                toFloat64(last_7_avg) + ifNull(toFloat64(sigma), 0) AS upper_bound,
+                'moving_average_7d' AS model_name
+            FROM revenue_stats
+            CROSS JOIN revenue_last_7
+            CROSS JOIN (
+                SELECT number + 1 AS horizon
+                FROM numbers(30)
+            ) AS revenue_horizon
+
+            UNION ALL
+
+            SELECT
+                sales_date,
+                'Orders' AS metric_name,
+                actual_value,
+                CAST(NULL, 'Nullable(Float64)') AS forecast_value,
+                CAST(NULL, 'Nullable(Float64)') AS lower_bound,
+                CAST(NULL, 'Nullable(Float64)') AS upper_bound,
+                'actual_history' AS model_name
+            FROM order_history
+
+            UNION ALL
+
+            SELECT
+                addDays(max_sales_date, horizon) AS sales_date,
+                'Orders' AS metric_name,
+                CAST(NULL, 'Nullable(Float64)') AS actual_value,
+                toFloat64(last_7_avg) AS forecast_value,
+                greatest(toFloat64(last_7_avg) - ifNull(toFloat64(sigma), 0), 0) AS lower_bound,
+                toFloat64(last_7_avg) + ifNull(toFloat64(sigma), 0) AS upper_bound,
+                'moving_average_7d' AS model_name
+            FROM order_stats
+            CROSS JOIN order_last_7
+            CROSS JOIN (
+                SELECT number + 1 AS horizon
+                FROM numbers(30)
+            ) AS order_horizon
+        )
+        """
+    )
+
+
 def main() -> None:
     describe_runtime_context()
     log("Loading raw Kaggle dataset...")
@@ -373,6 +501,7 @@ def main() -> None:
         log(f"Running SQL file: {sql_file}")
         run_sql_file(client, sql_file)
 
+    build_baseline_forecast(client)
     validate(client)
     log("Pipeline completed successfully.")
 

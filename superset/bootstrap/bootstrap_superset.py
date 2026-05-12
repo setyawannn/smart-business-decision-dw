@@ -1,7 +1,10 @@
 import json
 import os
+from calendar import monthrange
+from datetime import date
 from urllib.parse import quote_plus
 
+import clickhouse_connect
 from superset.app import create_app
 from superset.extensions import db
 
@@ -31,6 +34,28 @@ DATASETS = {
         "channel_id": "UInt64",
         "quantity": "Int32",
         "revenue": "Float64",
+        "cost": "Float64",
+        "profit": "Float64",
+        "discount": "Float64",
+    },
+    "silver_orders_clean": {
+        "order_id": "String",
+        "order_date": "Date",
+        "customer_id": "String",
+        "customer_name": "String",
+        "product_id": "String",
+        "product_name": "String",
+        "category": "String",
+        "sub_category": "String",
+        "channel_name": "String",
+        "quantity": "Int32",
+        "revenue": "Float64",
+        "cost": "Float64",
+        "profit": "Float64",
+        "discount": "Float64",
+        "country": "String",
+        "state": "String",
+        "city": "String",
     },
     "dim_product": {
         "product_id": "String",
@@ -79,38 +104,99 @@ DATASETS = {
         "total_revenue": "Float64",
         "total_profit": "Float64",
         "total_orders": "UInt64",
+        "total_quantity": "Int64",
+    },
+    "sales_forecast_result": {
+        "sales_date": "Date",
+        "metric_name": "String",
+        "actual_value": "Nullable(Float64)",
+        "forecast_value": "Nullable(Float64)",
+        "lower_bound": "Nullable(Float64)",
+        "upper_bound": "Nullable(Float64)",
+        "model_name": "String",
+        "created_at": "DateTime",
+    },
+    "kpi_daily_snapshot": {
+        "snapshot_date": "Date",
+        "revenue": "Float64",
+        "orders": "UInt64",
+        "quantity": "Int64",
+        "aov": "Float64",
+    },
+    "geographic_daily_summary": {
+        "order_date": "Date",
+        "iso_code": "String",
+        "state": "String",
+        "total_revenue": "Float64",
+        "total_orders": "UInt64",
+    },
+    "channel_monthly_summary": {
+        "snapshot_month": "Date",
+        "channel_name": "String",
+        "total_revenue": "Float64",
+        "total_orders": "UInt64",
+    },
+}
+
+DATASET_MAIN_DTTS = {
+    "fact_sales": "order_date",
+    "silver_orders_clean": "order_date",
+    "sales_forecast_ready": "sales_date",
+    "sales_forecast_result": "sales_date",
+    "kpi_daily_snapshot": "snapshot_date",
+    "geographic_daily_summary": "order_date",
+    "channel_monthly_summary": "snapshot_month",
+    "vw_revenue_by_category": "order_date",
+    "vw_revenue_by_sub_category": "order_date",
+    "vw_top_products_by_revenue": "order_date",
+    "vw_channel_performance": "order_date",
+    "vw_geographic_performance": "order_date",
+    "vw_kpi_monthly_status": "snapshot_month",
+    "vw_kpi_daily_comparison": "snapshot_date",
+    "vw_monthly_channel_revenue": "snapshot_month",
+    "vw_top_states_revenue": "order_date",
+}
+
+DATASET_CUSTOM_METRICS = {
+    "fact_sales": {
+        "total_revenue": "SUM(revenue)",
+        "total_profit": "SUM(profit)",
+        "total_quantity_sold": "SUM(quantity)",
+        "total_orders": "COUNT(DISTINCT order_id)",
+        "average_order_value": (
+            "CASE WHEN COUNT(DISTINCT order_id) = 0 THEN 0 "
+            "ELSE SUM(revenue) / COUNT(DISTINCT order_id) END"
+        ),
+    },
+    "kpi_daily_snapshot": {
+        "total_revenue": "SUM(revenue)",
+        "total_orders": "SUM(orders)",
+        "total_quantity_sold": "SUM(quantity)",
+        "average_order_value": "AVG(aov)",
+    },
+    "sales_forecast_result": {
+        "actual_value": "SUM(actual_value)",
+        "forecast_value": "SUM(forecast_value)",
+        "lower_bound": "SUM(lower_bound)",
+        "upper_bound": "SUM(upper_bound)",
     },
 }
 
 VIRTUAL_DATASETS = {
-    "vw_kpi_sales_overview": {
-        "sql": """
-SELECT
-    sum(revenue) AS total_revenue,
-    countDistinct(order_id) AS total_orders,
-    sum(quantity) AS total_quantity_sold,
-    if(countDistinct(order_id) = 0, 0, sum(revenue) / countDistinct(order_id)) AS average_order_value
-FROM smart_dw.fact_sales
-""",
-        "columns": {
-            "total_revenue": "Float64",
-            "total_orders": "UInt64",
-            "total_quantity_sold": "Int64",
-            "average_order_value": "Float64",
-        },
-    },
     "vw_revenue_by_category": {
         "sql": """
 SELECT
+    f.order_date AS order_date,
     ifNull(p.category, 'Unknown') AS category,
     sum(f.revenue) AS total_revenue,
     sum(f.quantity) AS total_quantity
 FROM smart_dw.fact_sales AS f
 LEFT JOIN smart_dw.dim_product AS p ON f.product_id = p.product_id
-GROUP BY category
+GROUP BY f.order_date, category
 ORDER BY total_revenue DESC
 """,
         "columns": {
+            "order_date": "Date",
             "category": "String",
             "total_revenue": "Float64",
             "total_quantity": "Int64",
@@ -119,16 +205,17 @@ ORDER BY total_revenue DESC
     "vw_revenue_by_sub_category": {
         "sql": """
 SELECT
+    f.order_date AS order_date,
     ifNull(p.sub_category, 'Unknown') AS sub_category,
     sum(f.revenue) AS total_revenue,
     sum(f.quantity) AS total_quantity
 FROM smart_dw.fact_sales AS f
 LEFT JOIN smart_dw.dim_product AS p ON f.product_id = p.product_id
-GROUP BY sub_category
+GROUP BY f.order_date, sub_category
 ORDER BY total_revenue DESC
-LIMIT 20
 """,
         "columns": {
+            "order_date": "Date",
             "sub_category": "String",
             "total_revenue": "Float64",
             "total_quantity": "Int64",
@@ -137,16 +224,19 @@ LIMIT 20
     "vw_top_products_by_revenue": {
         "sql": """
 SELECT
+    f.order_date AS order_date,
     ifNull(p.product_name, 'Unknown') AS product_name,
     ifNull(p.category, 'Unknown') AS category,
-    s.total_revenue,
-    s.total_quantity,
-    s.total_orders
-FROM smart_dw.product_profitability_summary AS s
-LEFT JOIN smart_dw.dim_product AS p ON s.product_id = p.product_id
-ORDER BY s.total_revenue DESC
+    sum(f.revenue) AS total_revenue,
+    sum(f.quantity) AS total_quantity,
+    countDistinct(f.order_id) AS total_orders
+FROM smart_dw.fact_sales AS f
+LEFT JOIN smart_dw.dim_product AS p ON f.product_id = p.product_id
+GROUP BY f.order_date, product_name, category
+ORDER BY total_revenue DESC
 """,
         "columns": {
+            "order_date": "Date",
             "product_name": "String",
             "category": "String",
             "total_revenue": "Float64",
@@ -157,15 +247,18 @@ ORDER BY s.total_revenue DESC
     "vw_channel_performance": {
         "sql": """
 SELECT
+    f.order_date AS order_date,
     ifNull(c.channel_name, 'Unknown') AS channel_name,
     ifNull(c.channel_type, 'Unknown') AS channel_type,
-    s.total_revenue,
-    s.total_orders
-FROM smart_dw.channel_performance_summary AS s
-LEFT JOIN smart_dw.dim_channel AS c ON s.channel_id = c.channel_id
-ORDER BY s.total_revenue DESC
+    sum(f.revenue) AS total_revenue,
+    countDistinct(f.order_id) AS total_orders
+FROM smart_dw.fact_sales AS f
+LEFT JOIN smart_dw.dim_channel AS c ON f.channel_id = c.channel_id
+GROUP BY f.order_date, channel_name, channel_type
+ORDER BY total_revenue DESC
 """,
         "columns": {
+            "order_date": "Date",
             "channel_name": "String",
             "channel_type": "String",
             "total_revenue": "Float64",
@@ -191,6 +284,7 @@ ORDER BY customers DESC
     "vw_geographic_performance": {
         "sql": """
 SELECT
+    order_date AS order_date,
     CASE 
         WHEN upper(state) IN ('MAHARASHTRA') THEN 'IN-MH'
         WHEN upper(state) IN ('KARNATAKA') THEN 'IN-KA'
@@ -235,11 +329,204 @@ SELECT
     countDistinct(order_id) AS total_orders
 FROM smart_dw.silver_orders_clean
 WHERE state != 'Unknown' AND state != ''
-GROUP BY state
+GROUP BY order_date, state
 ORDER BY total_revenue DESC
 """,
         "columns": {
+            "order_date": "Date",
             "iso_code": "String",
+            "state": "String",
+            "total_revenue": "Float64",
+            "total_orders": "UInt64",
+        },
+    },
+    "vw_kpi_monthly_status": {
+        "sql": """
+WITH monthly AS (
+    SELECT
+        toStartOfMonth(order_date) AS snapshot_month,
+        sum(revenue) AS total_revenue,
+        countDistinct(order_id) AS total_orders,
+        sum(quantity) AS total_quantity_sold,
+        if(countDistinct(order_id) = 0, 0, sum(revenue) / countDistinct(order_id)) AS average_order_value
+    FROM smart_dw.fact_sales
+    GROUP BY snapshot_month
+),
+monthly_with_previous AS (
+    SELECT
+        current.snapshot_month AS snapshot_month,
+        current.total_revenue AS total_revenue,
+        current.total_orders AS total_orders,
+        current.total_quantity_sold AS total_quantity_sold,
+        current.average_order_value AS average_order_value,
+        previous.total_revenue AS previous_total_revenue,
+        previous.total_orders AS previous_total_orders,
+        previous.total_quantity_sold AS previous_total_quantity_sold,
+        previous.average_order_value AS previous_average_order_value
+    FROM monthly AS current
+    LEFT JOIN monthly AS previous
+        ON previous.snapshot_month = addMonths(current.snapshot_month, -1)
+)
+SELECT
+    snapshot_month,
+    'Revenue' AS kpi_name,
+    total_revenue AS current_value,
+    previous_total_revenue AS previous_value,
+    total_revenue - ifNull(previous_total_revenue, 0) AS delta_value,
+    if(previous_total_revenue IS NULL OR previous_total_revenue = 0, NULL, (total_revenue - previous_total_revenue) / previous_total_revenue) AS delta_pct,
+    if(previous_total_revenue IS NULL, 'No Baseline', if(total_revenue >= previous_total_revenue, 'Up', 'Down')) AS trend_direction,
+    if(previous_total_revenue IS NULL, 'No Baseline', if(total_revenue >= previous_total_revenue, 'Meets Minimum', 'Below Minimum')) AS minimum_status
+FROM monthly_with_previous
+UNION ALL
+SELECT
+    snapshot_month,
+    'Orders' AS kpi_name,
+    toFloat64(total_orders) AS current_value,
+    toFloat64(previous_total_orders) AS previous_value,
+    toFloat64(total_orders - ifNull(previous_total_orders, 0)) AS delta_value,
+    if(previous_total_orders IS NULL OR previous_total_orders = 0, NULL, toFloat64(total_orders - previous_total_orders) / previous_total_orders) AS delta_pct,
+    if(previous_total_orders IS NULL, 'No Baseline', if(total_orders >= previous_total_orders, 'Up', 'Down')) AS trend_direction,
+    if(previous_total_orders IS NULL, 'No Baseline', if(total_orders >= previous_total_orders, 'Meets Minimum', 'Below Minimum')) AS minimum_status
+FROM monthly_with_previous
+UNION ALL
+SELECT
+    snapshot_month,
+    'Quantity' AS kpi_name,
+    toFloat64(total_quantity_sold) AS current_value,
+    toFloat64(previous_total_quantity_sold) AS previous_value,
+    toFloat64(total_quantity_sold - ifNull(previous_total_quantity_sold, 0)) AS delta_value,
+    if(previous_total_quantity_sold IS NULL OR previous_total_quantity_sold = 0, NULL, toFloat64(total_quantity_sold - previous_total_quantity_sold) / previous_total_quantity_sold) AS delta_pct,
+    if(previous_total_quantity_sold IS NULL, 'No Baseline', if(total_quantity_sold >= previous_total_quantity_sold, 'Up', 'Down')) AS trend_direction,
+    if(previous_total_quantity_sold IS NULL, 'No Baseline', if(total_quantity_sold >= previous_total_quantity_sold, 'Meets Minimum', 'Below Minimum')) AS minimum_status
+FROM monthly_with_previous
+UNION ALL
+SELECT
+    snapshot_month,
+    'AOV' AS kpi_name,
+    average_order_value AS current_value,
+    previous_average_order_value AS previous_value,
+    average_order_value - ifNull(previous_average_order_value, 0) AS delta_value,
+    if(previous_average_order_value IS NULL OR previous_average_order_value = 0, NULL, (average_order_value - previous_average_order_value) / previous_average_order_value) AS delta_pct,
+    if(previous_average_order_value IS NULL, 'No Baseline', if(average_order_value >= previous_average_order_value, 'Up', 'Down')) AS trend_direction,
+    if(previous_average_order_value IS NULL, 'No Baseline', if(average_order_value >= previous_average_order_value, 'Meets Minimum', 'Below Minimum')) AS minimum_status
+FROM monthly_with_previous
+""",
+        "columns": {
+            "snapshot_month": "Date",
+            "kpi_name": "String",
+            "current_value": "Float64",
+            "previous_value": "Nullable(Float64)",
+            "delta_value": "Float64",
+            "delta_pct": "Nullable(Float64)",
+            "trend_direction": "String",
+            "minimum_status": "String",
+        },
+    },
+    "vw_kpi_daily_comparison": {
+        "sql": """
+WITH daily AS (
+    SELECT
+        order_date AS snapshot_date,
+        sum(revenue) AS total_revenue,
+        countDistinct(order_id) AS total_orders,
+        sum(quantity) AS total_quantity_sold,
+        if(countDistinct(order_id) = 0, 0, sum(revenue) / countDistinct(order_id)) AS average_order_value
+    FROM smart_dw.fact_sales
+    GROUP BY snapshot_date
+),
+daily_with_previous AS (
+    SELECT
+        current.snapshot_date AS snapshot_date,
+        current.total_revenue AS total_revenue,
+        current.total_orders AS total_orders,
+        current.total_quantity_sold AS total_quantity_sold,
+        current.average_order_value AS average_order_value,
+        previous.total_revenue AS previous_total_revenue,
+        previous.total_orders AS previous_total_orders,
+        previous.total_quantity_sold AS previous_total_quantity_sold,
+        previous.average_order_value AS previous_average_order_value
+    FROM daily AS current
+    LEFT JOIN daily AS previous
+        ON previous.snapshot_date = addDays(current.snapshot_date, -1)
+)
+SELECT
+    snapshot_date,
+    'Revenue' AS kpi_name,
+    total_revenue AS current_value,
+    previous_total_revenue AS previous_value,
+    total_revenue - ifNull(previous_total_revenue, 0) AS delta_value,
+    if(previous_total_revenue IS NULL OR previous_total_revenue = 0, NULL, (total_revenue - previous_total_revenue) / previous_total_revenue) AS delta_pct
+FROM daily_with_previous
+UNION ALL
+SELECT
+    snapshot_date,
+    'Orders' AS kpi_name,
+    toFloat64(total_orders) AS current_value,
+    toFloat64(previous_total_orders) AS previous_value,
+    toFloat64(total_orders - ifNull(previous_total_orders, 0)) AS delta_value,
+    if(previous_total_orders IS NULL OR previous_total_orders = 0, NULL, toFloat64(total_orders - previous_total_orders) / previous_total_orders) AS delta_pct
+FROM daily_with_previous
+UNION ALL
+SELECT
+    snapshot_date,
+    'Quantity' AS kpi_name,
+    toFloat64(total_quantity_sold) AS current_value,
+    toFloat64(previous_total_quantity_sold) AS previous_value,
+    toFloat64(total_quantity_sold - ifNull(previous_total_quantity_sold, 0)) AS delta_value,
+    if(previous_total_quantity_sold IS NULL OR previous_total_quantity_sold = 0, NULL, toFloat64(total_quantity_sold - previous_total_quantity_sold) / previous_total_quantity_sold) AS delta_pct
+FROM daily_with_previous
+UNION ALL
+SELECT
+    snapshot_date,
+    'AOV' AS kpi_name,
+    average_order_value AS current_value,
+    previous_average_order_value AS previous_value,
+    average_order_value - ifNull(previous_average_order_value, 0) AS delta_value,
+    if(previous_average_order_value IS NULL OR previous_average_order_value = 0, NULL, (average_order_value - previous_average_order_value) / previous_average_order_value) AS delta_pct
+FROM daily_with_previous
+""",
+        "columns": {
+            "snapshot_date": "Date",
+            "kpi_name": "String",
+            "current_value": "Float64",
+            "previous_value": "Nullable(Float64)",
+            "delta_value": "Float64",
+            "delta_pct": "Nullable(Float64)",
+        },
+    },
+    "vw_monthly_channel_revenue": {
+        "sql": """
+SELECT
+    toStartOfMonth(f.order_date) AS snapshot_month,
+    ifNull(c.channel_name, 'Unknown') AS channel_name,
+    sum(f.revenue) AS total_revenue,
+    countDistinct(f.order_id) AS total_orders
+FROM smart_dw.fact_sales AS f
+LEFT JOIN smart_dw.dim_channel AS c ON f.channel_id = c.channel_id
+GROUP BY snapshot_month, channel_name
+ORDER BY snapshot_month, total_revenue DESC
+""",
+        "columns": {
+            "snapshot_month": "Date",
+            "channel_name": "String",
+            "total_revenue": "Float64",
+            "total_orders": "UInt64",
+        },
+    },
+    "vw_top_states_revenue": {
+        "sql": """
+SELECT
+    order_date AS order_date,
+    state,
+    sum(revenue) AS total_revenue,
+    countDistinct(order_id) AS total_orders
+FROM smart_dw.silver_orders_clean
+WHERE state != 'Unknown' AND state != ''
+GROUP BY order_date, state
+ORDER BY total_revenue DESC
+""",
+        "columns": {
+            "order_date": "Date",
             "state": "String",
             "total_revenue": "Float64",
             "total_orders": "UInt64",
@@ -303,6 +590,7 @@ def get_or_create_dataset(database, table_name, columns, sql=None):
     dataset.is_sqllab_view = bool(sql)
     dataset.template_params = "{}"
     dataset.fetch_values_predicate = None
+    dataset.main_dttm_col = DATASET_MAIN_DTTS.get(table_name)
     sync_columns(dataset, columns)
     numeric_prefixes = ("int", "uint", "float", "decimal")
     metrics = {"count": "COUNT(*)"}
@@ -311,6 +599,7 @@ def get_or_create_dataset(database, table_name, columns, sql=None):
             metrics[column_name] = f"SUM({column_name})"
     if "order_id" in columns:
         metrics["total_orders"] = "COUNT(DISTINCT order_id)"
+    metrics.update(DATASET_CUSTOM_METRICS.get(table_name, {}))
     sync_metrics(dataset, metrics)
     return dataset
 
@@ -335,6 +624,73 @@ def temporal_filter(column):
         "comparator": "No filter",
         "expressionType": "SIMPLE",
     }
+
+
+def get_latest_month_range():
+    client = clickhouse_connect.get_client(
+        host=os.getenv("CLICKHOUSE_HOST", "clickhouse"),
+        port=int(os.getenv("CLICKHOUSE_HTTP_PORT", "8123")),
+        username=os.getenv("CLICKHOUSE_USER", "superset"),
+        password=os.getenv("CLICKHOUSE_PASSWORD", "superset_lokal_kamu"),
+        database=SCHEMA,
+    )
+    result = client.query("SELECT max(order_date) FROM smart_dw.fact_sales")
+    max_order_date = result.result_rows[0][0]
+    if max_order_date is None:
+        return "No filter"
+    if hasattr(max_order_date, "date"):
+        max_order_date = max_order_date.date()
+    month_start = date(max_order_date.year, max_order_date.month, 1)
+    month_end = date(max_order_date.year, max_order_date.month, monthrange(max_order_date.year, max_order_date.month)[1])
+    return f"{month_start.isoformat()} : {month_end.isoformat()}"
+
+
+def build_native_time_filter(datasets):
+    latest_month_range = get_latest_month_range()
+    targets = []
+    for dataset_name, column_name in DATASET_MAIN_DTTS.items():
+        dataset = datasets.get(dataset_name)
+        if dataset is None:
+            continue
+        targets.append(
+            {
+                "datasetId": dataset.id,
+                "column": {"name": column_name},
+            }
+        )
+    return [
+        {
+            "id": "NATIVE_FILTER-time_range",
+            "controlValues": {
+                "enableEmptyFilter": False,
+                "defaultToFirstItem": False,
+            },
+            "name": "Month Filter",
+            "filterType": "filter_time",
+            "targets": targets,
+            "defaultDataMask": {
+                "extraFormData": {"time_range": latest_month_range},
+                "filterState": {
+                    "label": latest_month_range,
+                    "validateStatus": False,
+                    "value": latest_month_range,
+                },
+                "ownState": {},
+            },
+            "cascadeParentIds": [],
+            "scope": {
+                "rootPath": ["ROOT_ID"],
+                "excluded": [],
+            },
+        }
+    ]
+
+
+def delete_obsolete_charts(desired_chart_names):
+    existing_charts = db.session.query(Slice).filter(Slice.slice_name.like(f"{CHART_PREFIX}%")).all()
+    for chart in existing_charts:
+        if chart.slice_name not in desired_chart_names:
+            db.session.delete(chart)
 
 
 def get_or_create_chart(name, dataset, viz_type, params):
@@ -367,15 +723,23 @@ def build_dashboard_layout(charts):
         layout[grid_id]["children"].append(row_id)
         layout[row_id] = {"type": "ROW", "id": row_id, "children": [], "meta": root_meta}
         row_index += 1
-        for col_index, slice_obj in enumerate(chart):
+        for col_index, chart_item in enumerate(chart):
+            if isinstance(chart_item, dict):
+                slice_obj = chart_item["slice"]
+                width = chart_item.get("width", 6)
+                height = chart_item.get("height", 64)
+            else:
+                slice_obj = chart_item
+                width = 3 if len(chart) > 2 else 6
+                height = 48 if len(chart) > 2 else 64
             chart_id = f"CHART-{slice_obj.id}"
             meta = {
                 "background": "BACKGROUND_TRANSPARENT",
                 "chartId": slice_obj.id,
-                "height": 48 if len(chart) > 2 else 64,
+                "height": height,
                 "sliceName": slice_obj.slice_name,
                 "uuid": str(slice_obj.uuid) if getattr(slice_obj, "uuid", None) else None,
-                "width": 3 if len(chart) > 2 else 6,
+                "width": width,
             }
             layout[row_id]["children"].append(chart_id)
             layout[chart_id] = {
@@ -417,66 +781,208 @@ def main():
             )
         db.session.flush()
 
-        kpi = datasets["vw_kpi_sales_overview"]
+        kpi = datasets["fact_sales"]
         forecast = datasets["sales_forecast_ready"]
+        forecast_result = datasets["sales_forecast_result"]
         category = datasets["vw_revenue_by_category"]
         sub_category = datasets["vw_revenue_by_sub_category"]
         products = datasets["vw_top_products_by_revenue"]
         channels = datasets["vw_channel_performance"]
         rfm = datasets["vw_customer_segment_distribution"]
-        geo = datasets["vw_geographic_performance"]
+        geo = datasets["geographic_daily_summary"]
+        kpi_status = datasets["vw_kpi_monthly_status"]
+        kpi_daily = datasets["kpi_daily_snapshot"]
+        monthly_channels = datasets["channel_monthly_summary"]
+        top_states = datasets["vw_top_states_revenue"]
 
         charts = [
             get_or_create_chart(
                 "Total Revenue",
-                kpi,
+                kpi_daily,
                 "big_number_total",
                 chart_params(
-                    kpi,
+                    kpi_daily,
                     "big_number_total",
                     metric="total_revenue",
                     header_font_size=0.38,
                     subheader_font_size=0.12,
                     y_axis_format="SMART_NUMBER",
+                    time_range="No filter",
+                    granularity_sqla="snapshot_date",
+                    time_grain_sqla="P1M",
+                    compare_lag="1",
+                    comparison_type="percentage",
+                    show_trend_line=True,
                 ),
             ),
             get_or_create_chart(
                 "Total Orders",
-                kpi,
+                kpi_daily,
                 "big_number_total",
                 chart_params(
-                    kpi,
+                    kpi_daily,
                     "big_number_total",
                     metric="total_orders",
                     header_font_size=0.38,
                     subheader_font_size=0.12,
                     y_axis_format="SMART_NUMBER",
+                    time_range="No filter",
+                    granularity_sqla="snapshot_date",
+                    time_grain_sqla="P1M",
+                    compare_lag="1",
+                    comparison_type="percentage",
+                    show_trend_line=True,
                 ),
             ),
             get_or_create_chart(
                 "Total Quantity Sold",
-                kpi,
+                kpi_daily,
                 "big_number_total",
                 chart_params(
-                    kpi,
+                    kpi_daily,
                     "big_number_total",
                     metric="total_quantity_sold",
                     header_font_size=0.38,
                     subheader_font_size=0.12,
                     y_axis_format="SMART_NUMBER",
+                    time_range="No filter",
+                    granularity_sqla="snapshot_date",
+                    time_grain_sqla="P1M",
+                    compare_lag="1",
+                    comparison_type="percentage",
+                    show_trend_line=True,
                 ),
             ),
             get_or_create_chart(
                 "Average Order Value",
-                kpi,
+                kpi_daily,
                 "big_number_total",
                 chart_params(
-                    kpi,
+                    kpi_daily,
                     "big_number_total",
                     metric="average_order_value",
                     header_font_size=0.38,
                     subheader_font_size=0.12,
                     y_axis_format="SMART_NUMBER",
+                    time_range="No filter",
+                    granularity_sqla="snapshot_date",
+                    time_grain_sqla="P1M",
+                    compare_lag="1",
+                    comparison_type="percentage",
+                    show_trend_line=True,
+                ),
+            ),
+            get_or_create_chart(
+                "KPI Performance Status",
+                kpi_status,
+                "table",
+                chart_params(
+                    kpi_status,
+                    "table",
+                    query_mode="raw",
+                    all_columns=[
+                        "kpi_name",
+                        "current_value",
+                        "previous_value",
+                        "delta_value",
+                        "delta_pct",
+                        "trend_direction",
+                        "minimum_status",
+                    ],
+                    order_by_cols=[],
+                    row_limit=100,
+                    server_page_length=10,
+                    show_cell_bars=True,
+                    color_pn=True,
+                    allow_render_html=True,
+                    time_range="No filter",
+                ),
+            ),
+            get_or_create_chart(
+                "Revenue Forecast Ready",
+                forecast,
+                "echarts_timeseries_line",
+                chart_params(
+                    forecast,
+                    "echarts_timeseries_line",
+                    metrics=["total_revenue", "total_orders"],
+                    x_axis="sales_date",
+                    time_grain_sqla="P1M",
+                    x_axis_sort_asc=True,
+                    x_axis_sort_series="name",
+                    x_axis_sort_series_ascending=True,
+                    adhoc_filters=[],
+                    order_desc=True,
+                    row_limit=10000,
+                    truncate_metric=True,
+                    show_empty_columns=True,
+                    comparison_type="values",
+                    annotation_layers=[],
+                    seriesType="echarts_timeseries_line",
+                    only_total=False,
+                    opacity=0.25,
+                    markerSize=4,
+                    show_legend=True,
+                    x_axis_time_format="smart_date",
+                    rich_tooltip=True,
+                    tooltipTimeFormat="smart_date",
+                    y_axis_format="SMART_NUMBER",
+                    truncateXAxis=True,
+                    y_axis_bounds=[None, None],
+                    time_range="No filter",
+                ),
+            ),
+            get_or_create_chart(
+                "Revenue Forecast",
+                forecast_result,
+                "echarts_timeseries_line",
+                chart_params(
+                    forecast_result,
+                    "echarts_timeseries_line",
+                    metrics=[
+                        {
+                            "expressionType": "SQL",
+                            "label": "Actual Revenue",
+                            "sqlExpression": "SUM(actual_value)",
+                        },
+                        {
+                            "expressionType": "SQL",
+                            "label": "Forecast Revenue",
+                            "sqlExpression": "SUM(forecast_value)",
+                        },
+                    ],
+                    x_axis="sales_date",
+                    time_grain_sqla="P1D",
+                    x_axis_sort_asc=True,
+                    x_axis_sort_series="name",
+                    x_axis_sort_series_ascending=True,
+                    adhoc_filters=[
+                        {
+                            "clause": "WHERE",
+                            "subject": "metric_name",
+                            "operator": "==",
+                            "comparator": "Revenue",
+                            "expressionType": "SIMPLE",
+                        }
+                    ],
+                    order_desc=True,
+                    row_limit=10000,
+                    truncate_metric=True,
+                    show_empty_columns=True,
+                    comparison_type="values",
+                    annotation_layers=[],
+                    seriesType="echarts_timeseries_line",
+                    only_total=False,
+                    opacity=0.25,
+                    markerSize=4,
+                    show_legend=True,
+                    x_axis_time_format="smart_date",
+                    rich_tooltip=True,
+                    tooltipTimeFormat="smart_date",
+                    y_axis_format="SMART_NUMBER",
+                    truncateXAxis=True,
+                    y_axis_bounds=[None, None],
+                    time_range="No filter",
                 ),
             ),
             get_or_create_chart(
@@ -492,15 +998,13 @@ def main():
                     x_axis_sort_asc=True,
                     x_axis_sort_series="name",
                     x_axis_sort_series_ascending=True,
-                    adhoc_filters=[temporal_filter("sales_date")],
+                    adhoc_filters=[],
                     order_desc=True,
                     row_limit=10000,
                     truncate_metric=True,
                     show_empty_columns=True,
                     comparison_type="values",
                     annotation_layers=[],
-                    forecastPeriods=10,
-                    forecastInterval=0.8,
                     seriesType="echarts_timeseries_line",
                     only_total=True,
                     opacity=0.25,
@@ -512,6 +1016,7 @@ def main():
                     y_axis_format="SMART_NUMBER",
                     truncateXAxis=True,
                     y_axis_bounds=[None, None],
+                    time_range="No filter",
                 ),
             ),
             get_or_create_chart(
@@ -527,15 +1032,13 @@ def main():
                     x_axis_sort_asc=True,
                     x_axis_sort_series="name",
                     x_axis_sort_series_ascending=True,
-                    adhoc_filters=[temporal_filter("sales_date")],
+                    adhoc_filters=[],
                     order_desc=True,
                     row_limit=10000,
                     truncate_metric=True,
                     show_empty_columns=True,
                     comparison_type="values",
                     annotation_layers=[],
-                    forecastPeriods=10,
-                    forecastInterval=0.8,
                     seriesType="echarts_timeseries_line",
                     only_total=True,
                     opacity=0.25,
@@ -547,6 +1050,41 @@ def main():
                     y_axis_format="SMART_NUMBER",
                     truncateXAxis=True,
                     y_axis_bounds=[None, None],
+                    time_range="No filter",
+                ),
+            ),
+            get_or_create_chart(
+                "Daily Quantity Trend",
+                forecast,
+                "echarts_timeseries_line",
+                chart_params(
+                    forecast,
+                    "echarts_timeseries_line",
+                    metrics=["total_quantity"],
+                    x_axis="sales_date",
+                    time_grain_sqla="P1D",
+                    x_axis_sort_asc=True,
+                    x_axis_sort_series="name",
+                    x_axis_sort_series_ascending=True,
+                    adhoc_filters=[],
+                    order_desc=True,
+                    row_limit=10000,
+                    truncate_metric=True,
+                    show_empty_columns=True,
+                    comparison_type="values",
+                    annotation_layers=[],
+                    seriesType="echarts_timeseries_line",
+                    only_total=True,
+                    opacity=0.25,
+                    markerSize=4,
+                    show_legend=False,
+                    x_axis_time_format="smart_date",
+                    rich_tooltip=True,
+                    tooltipTimeFormat="smart_date",
+                    y_axis_format="SMART_NUMBER",
+                    truncateXAxis=True,
+                    y_axis_bounds=[None, None],
+                    time_range="No filter",
                 ),
             ),
             get_or_create_chart(
@@ -580,6 +1118,7 @@ def main():
                     truncateXAxis=True,
                     y_axis_bounds=[None, None],
                     rich_tooltip=True,
+                    time_range="No filter",
                 ),
             ),
             get_or_create_chart(
@@ -613,6 +1152,27 @@ def main():
                     truncateXAxis=True,
                     y_axis_bounds=[None, None],
                     rich_tooltip=True,
+                    time_range="No filter",
+                ),
+            ),
+            get_or_create_chart(
+                "Monthly Revenue by Channel",
+                monthly_channels,
+                "echarts_timeseries_bar",
+                chart_params(
+                    monthly_channels,
+                    "echarts_timeseries_bar",
+                    x_axis="snapshot_month",
+                    groupby=["channel_name"],
+                    metrics=["total_revenue"],
+                    time_grain_sqla="P1M",
+                    row_limit=10000,
+                    order_desc=True,
+                    show_legend=True,
+                    only_total=False,
+                    y_axis_format="SMART_NUMBER",
+                    rich_tooltip=True,
+                    time_range="No filter",
                 ),
             ),
             get_or_create_chart(
@@ -622,17 +1182,17 @@ def main():
                 chart_params(
                     products,
                     "table",
-                    query_mode="raw",
-                    groupby=[],
-                    all_columns=["product_name", "category", "total_revenue", "total_quantity", "total_orders"],
-                    percent_metrics=[],
-                    order_by_cols=[],
+                    query_mode="aggregate",
+                    groupby=["product_name", "category"],
+                    metrics=["total_revenue", "total_quantity", "total_orders"],
+                    order_by_cols=["[\"total_revenue\", false]"],
                     row_limit=10000,
                     server_page_length=10,
                     table_timestamp_format="smart_date",
                     show_cell_bars=True,
                     color_pn=True,
                     allow_render_html=True,
+                    time_range="No filter",
                 ),
             ),
             get_or_create_chart(
@@ -642,17 +1202,36 @@ def main():
                 chart_params(
                     channels,
                     "table",
-                    query_mode="raw",
-                    groupby=[],
-                    all_columns=["channel_name", "channel_type", "total_revenue", "total_orders"],
-                    percent_metrics=[],
-                    order_by_cols=[],
+                    query_mode="aggregate",
+                    groupby=["channel_name", "channel_type"],
+                    metrics=["total_revenue", "total_orders"],
+                    order_by_cols=["[\"total_revenue\", false]"],
                     row_limit=10000,
                     server_page_length=10,
                     table_timestamp_format="smart_date",
                     show_cell_bars=True,
                     color_pn=True,
                     allow_render_html=True,
+                    time_range="No filter",
+                ),
+            ),
+            get_or_create_chart(
+                "Top States by Revenue",
+                top_states,
+                "table",
+                chart_params(
+                    top_states,
+                    "table",
+                    query_mode="aggregate",
+                    groupby=["state"],
+                    metrics=["total_revenue", "total_orders"],
+                    order_by_cols=["[\"total_revenue\", false]"],
+                    row_limit=10000,
+                    server_page_length=10,
+                    show_cell_bars=True,
+                    color_pn=True,
+                    allow_render_html=True,
+                    time_range="No filter",
                 ),
             ),
             get_or_create_chart(
@@ -692,10 +1271,12 @@ def main():
                     metric="total_revenue",
                     number_format="SMART_NUMBER",
                     linear_color_scheme="lyftColors",
+                    time_range="No filter",
                 ),
             ),
         ]
         db.session.flush()
+        delete_obsolete_charts({chart.slice_name for chart in charts})
 
         dashboard = db.session.query(Dashboard).filter_by(dashboard_title=DASHBOARD_TITLE).one_or_none()
         if dashboard is None:
@@ -703,7 +1284,21 @@ def main():
             db.session.add(dashboard)
         dashboard.slices = charts
         dashboard.position_json = json.dumps(
-            build_dashboard_layout([charts[:4], charts[4:6], charts[6:8], charts[8:10], charts[10:]])
+            build_dashboard_layout(
+                [
+                    charts[:4],
+                    [
+                        {"slice": charts[17], "width": 8, "height": 96},
+                        {"slice": charts[14], "width": 4, "height": 72},
+                    ],
+                    [charts[6], charts[5]],
+                    [charts[7], charts[8], charts[9]],
+                    [{"slice": charts[4], "width": 12, "height": 96}],
+                    [charts[10], charts[11]],
+                    [charts[12], charts[13]],
+                    [charts[15], charts[16]],
+                ]
+            )
         )
         dashboard.css = """
 .dashboard-component-chart-holder {
@@ -721,6 +1316,7 @@ def main():
                 "timed_refresh_immune_slices": [],
                 "expanded_slices": {},
                 "refresh_frequency": 0,
+                "native_filter_configuration": build_native_time_filter(datasets),
             }
         )
 

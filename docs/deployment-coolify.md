@@ -246,8 +246,12 @@ Service `pipeline` akan melakukan semua ini tanpa langkah manual tambahan:
    - `channel_performance_summary`
    - `product_profitability_summary`
    - `sales_forecast_ready`
+   - `kpi_daily_snapshot`
+   - `geographic_daily_summary`
+   - `channel_monthly_summary`
    - `geographic_performance_summary`
-12. Menjalankan validasi row count dan quality checks
+12. Membuat dan mengisi `sales_forecast_result`
+13. Menjalankan validasi row count dan quality checks
 
 ## Validasi Setelah Deploy
 
