@@ -425,13 +425,17 @@ docker exec -it smart_dw_clickhouse clickhouse-client --query "SHOW TABLES FROM 
 ```
 bronze_orders_raw
 channel_performance_summary
+channel_monthly_summary
 customer_rfm
 dim_channel
 dim_customer
 dim_product
 dim_time
 fact_sales
+geographic_daily_summary
+kpi_daily_snapshot
 product_profitability_summary
+sales_forecast_result
 sales_forecast_ready
 silver_orders_clean
 ```
@@ -514,6 +518,31 @@ Tabel `sales_forecast_ready` menyediakan data agregasi harian yang siap digunaka
 | `total_revenue` | Total revenue harian |
 | `total_profit` | Total profit harian |
 | `total_orders` | Total order harian |
+| `total_quantity` | Total quantity harian |
+
+### Forecast Result
+
+Tabel `sales_forecast_result` menyimpan hasil forecasting final:
+
+| Kolom | Deskripsi |
+|-------|-----------|
+| `sales_date` | Tanggal historis atau horizon forecast |
+| `metric_name` | Nama metric forecast |
+| `actual_value` | Nilai aktual historis |
+| `forecast_value` | Nilai prediksi |
+| `lower_bound` | Batas bawah prediksi |
+| `upper_bound` | Batas atas prediksi |
+| `model_name` | Nama model baseline |
+
+### Helper Tables Dashboard
+
+Pipeline juga membangun tabel ringkas berikut:
+
+| Tabel | Grain | Kegunaan |
+|------|-------|----------|
+| `kpi_daily_snapshot` | Harian | KPI cards + trendline |
+| `geographic_daily_summary` | Harian per state | Map revenue India |
+| `channel_monthly_summary` | Bulanan per channel | Chart channel bulanan |
 
 ---
 
@@ -536,6 +565,8 @@ Berikut adalah perintah-perintah yang dapat digunakan untuk dokumentasi dan eksp
 | **5.9** Sample Channel Performance | `docker exec -it smart_dw_clickhouse clickhouse-client --query "SELECT * FROM smart_dw.channel_performance_summary LIMIT 10"` |
 | **5.10** Sample Product Performance | `docker exec -it smart_dw_clickhouse clickhouse-client --query "SELECT * FROM smart_dw.product_profitability_summary ORDER BY total_revenue DESC LIMIT 10"` |
 | **5.11** Sample Forecast Ready | `docker exec -it smart_dw_clickhouse clickhouse-client --query "SELECT * FROM smart_dw.sales_forecast_ready ORDER BY sales_date LIMIT 10"` |
+| **5.12** Sample Forecast Result | `docker exec -it smart_dw_clickhouse clickhouse-client --query "SELECT * FROM smart_dw.sales_forecast_result ORDER BY metric_name, sales_date LIMIT 10"` |
+| **5.13** Sample KPI Daily Snapshot | `docker exec -it smart_dw_clickhouse clickhouse-client --query "SELECT * FROM smart_dw.kpi_daily_snapshot ORDER BY snapshot_date DESC LIMIT 10"` |
 
 ---
 
@@ -555,6 +586,8 @@ File utama `amazon_sale_report.csv` memiliki keterbatasan pada beberapa atribut 
 | `discount` | Tidak tersedia | Kolom tersedia, nilai 0 |
 
 **Dampak:** Analisis utama difokuskan pada `revenue`, `quantity`, `product`, `category`, `channel`, dan `time`.
+
+**Catatan tambahan:** kolom `cost` dan `profit` tetap dipertahankan di schema warehouse untuk kompatibilitas, tetapi dashboard utama tidak memakai seri profit sebagai indikator utama karena sumber data mengisinya dengan nol.
 
 ### Catatan Teknis
 
