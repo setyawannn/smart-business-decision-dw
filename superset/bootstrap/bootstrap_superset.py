@@ -729,7 +729,15 @@ def delete_obsolete_charts(desired_chart_names):
 
 def get_or_create_chart(name, dataset, viz_type, params):
     chart_name = f"{CHART_PREFIX}{name}"
-    chart = db.session.query(Slice).filter_by(slice_name=chart_name).one_or_none()
+    matching_charts = (
+        db.session.query(Slice)
+        .filter_by(slice_name=chart_name)
+        .order_by(Slice.id.desc())
+        .all()
+    )
+    chart = matching_charts[0] if matching_charts else None
+    for duplicate in matching_charts[1:]:
+        db.session.delete(duplicate)
     payload = json.dumps(params)
     if chart is None:
         chart = Slice(slice_name=chart_name, viz_type=viz_type)
